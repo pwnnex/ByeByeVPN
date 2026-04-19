@@ -13,7 +13,7 @@ anything else — please report it **before** publicly disclosing.
    — Private, auditable, integrates with the CVE process if needed.
 
 2. **ntc.party thread** — mention `@pwnnex` in the
-   [ByeByeVPN topic](https://ntc.party/) if the issue is minor and you
+   [ByeByeVPN topic NOT AVAILABLE RIGHT NOW](https://ntc.party/) if the issue is minor and you
    prefer open discussion. Anything sensitive should go via the
    GitHub advisory path above, not the public thread.
 

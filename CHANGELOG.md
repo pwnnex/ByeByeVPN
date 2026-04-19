@@ -1,5 +1,75 @@
 # Changelog
 
+## v2.5.1 — 2026-04-20
+
+Audit-driven cleanup pass on top of v2.5. No new features, no
+behavioural changes to the verdict engine. Three concrete improvements:
+
+### Replaced `rand()` with `RAND_bytes()` for outbound random bytes
+
+Two probes still used `rand()` (Windows LCG, seeded with `time(nullptr)`)
+to fill payload bytes that are sent to the target:
+
+* `src/byebyevpn.cpp` ~L995 — Shadowsocks probe: 64 bytes of garbage
+  sent to test "silent-on-junk" pattern.
+* `src/byebyevpn.cpp` ~L1813 — J3 probe #5: 512 bytes of random data
+  sent to test how the endpoint reacts to noise.
+
+Two issues with the previous code:
+
+1. `rand()` is a linear-congruential PRNG with terrible statistical
+   properties. Output passes a casual eyeball test but fails standard
+   PRNG suites — visible structure to anyone fingerprinting payload
+   distributions.
+2. Seed was `time(nullptr)` (one-second granularity ≈ 17 bits of
+   real entropy). An observer who knows when the scan ran (timestamp on
+   the receiving side ± a few seconds) can brute-force the exact bytes
+   the tool emitted. That's a uniqueness fingerprint by construction.
+
+Both call sites now use OpenSSL's `RAND_bytes()` — same cryptographic
+PRNG that the rest of the codebase already uses for protocol-layer
+random fields (TLS ClientRandom, QUIC DCID, WireGuard handshake
+material). Output is uniformly random and unpredictable.
+
+The unused `srand((unsigned)time(nullptr))` in `main()` is removed
+since nothing in the binary calls `rand()` anymore.
+
+### `BUILD.md` — OpenSSL provenance + reproducibility documentation
+
+New `BUILD.md` documents:
+
+* Exact build environment for the v2.5.1 release (compiler version,
+  OpenSSL version, host OS, target flags).
+* SHA256 of the static `libssl.a` / `libcrypto.a` actually used.
+* Three reproduction paths: msys2 (recommended), build-OpenSSL-from-source
+  (audit chain "I trust nothing pre-built"), Linux cross-compile.
+* Caveats around byte-reproducibility (currently no PE-timestamp
+  stripping; functionally reproducible, byte-wise not yet).
+* Why static linking was chosen and what the trade-offs are.
+
+The Makefile comment claiming `build-win/` archives were "shipped" in
+the repo was misleading — they're `.gitignore`d. Comment now points at
+`BUILD.md` instead.
+
+### `SECURITY.md` — disclosure policy + known-threats table
+
+New `SECURITY.md` documents:
+
+* How to report a vulnerability (GitHub Security Advisory preferred).
+* What counts as security-sensitive (with fingerprinting as the
+  primary class).
+* Realistic response timelines for a single-maintainer project.
+* **Known open threats table** — explicit acknowledgement of the
+  remaining attack surfaces that v2.5.1 does NOT close: TLS JA3 ≠
+  Chrome, behavioral burst pattern across IP-intel APIs, no
+  byte-reproducible build, no Authenticode signing, no GPG-signed
+  commits, OpenSSL CVE patchability via static linking.
+
+Listing them publicly removes them from the "potential audit gotcha"
+category — they're now documented limitations on the roadmap.
+
+---
+
 ## v2.5 — 2026-04-19
 
 Security hygiene pass. v2.4 embedded several identifying patterns into

@@ -8,7 +8,9 @@ WIN_SYS_LIBS = -lws2_32 -liphlpapi -lwinhttp -lcrypt32 -lbcrypt -ldnsapi -luser3
 SRC = src/byebyevpn.cpp
 BIN = byebyevpn
 
-# Path to prebuilt OpenSSL static archives (shipped in build-win/)
+# Path to prebuilt OpenSSL static archives. These are NOT shipped in the
+# repo (gitignored) — see BUILD.md for how to obtain them with verified
+# provenance (msys2 pacman package + SHA256 check).
 WIN_OSSL_DIR ?= build-win
 
 all: $(BIN)
@@ -53,7 +55,7 @@ static: $(SRC)
 # Output: byebyevpn-<VERSION>-win64.zip containing ONE runnable exe.
 # Override with:  make release-zip VERSION=v2.3
 # -----------------------------------------------------------------
-VERSION ?= v2.5
+VERSION ?= v2.5.1
 ZIP_NAME = $(BIN)-$(VERSION)-win64.zip
 
 release-zip: windows-static

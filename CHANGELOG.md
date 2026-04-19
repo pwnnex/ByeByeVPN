@@ -1,5 +1,138 @@
 # Changelog
 
+## v2.5 — 2026-04-19
+
+Security hygiene pass. v2.4 embedded several identifying patterns into
+low-level protocol fields (TLS ClientRandom, QUIC DCID, L2TP Host Name,
+ICMP payload, SSH version banner) that were meant as debug-time sentinels
+but read as covert fingerprints to anyone auditing the source. v2.5
+removes all such markers from on-the-wire protocol bodies. Log-layer
+markers (HTTP `User-Agent: Mozilla/5.0 ByeByeVPN`) stay — they're
+application-level, not protocol-level, and are the intentional way to
+separate the scanner's own traffic from real user traffic in `nginx`
+access logs.
+
+### Removed protocol-layer fingerprints
+
+* **J3 probe #6 — TLS ClientHello** (`src/byebyevpn.cpp` ~L1784)
+  The 32-byte ClientRandom field used to carry a hardcoded ASCII pattern
+  (`RUSSIAN\0BYEBYEVPNACTIVEPROBEJ3\0\0`) mislabelled in the code as
+  `// 32 bytes random`. It is now filled with `RAND_bytes()` per probe,
+  matching what any real TLS client emits.
+
+* **QUIC Initial probe DCID** (`src/byebyevpn.cpp` ~L1924)
+  Destination Connection ID was a fixed `0xBB ×8`. Now `RAND_bytes(8)`.
+
+* **Hysteria2 probe DCID** (`src/byebyevpn.cpp` ~L2795)
+  Destination Connection ID was a sequential `0xA1..0xA8`. Now
+  `RAND_bytes(8)`.
+
+* **L2TP SCCRQ Host Name AVP** (`src/byebyevpn.cpp` ~L2828)
+  Host Name field was `"BBV"`. Now `"lac"` (generic L2TP Access
+  Concentrator, matches what real clients send).
+
+* **ICMP traceroute payload** (`src/byebyevpn.cpp` ~L2698)
+  Echo payload was the string `"ByeByeVPN"`. Now the standard 32-byte
+  Windows `ping.exe` pattern `"abcdefghijklmnopqrstuvwabcdefghi"`.
+
+* **J3 probe #4 — SSH banner** (`src/byebyevpn.cpp` ~L1773)
+  Banner was `SSH-2.0-ByeByeVPN`. Now `SSH-2.0-OpenSSH_8.9p1` — a
+  plausible real-client banner, which is what we want DPI to classify as
+  "SSH" for the active-probe test.
+
+### Outgoing HTTP traffic fully de-identified (full Chrome header set)
+
+Earlier draft notes for v2.5 had the UA marker kept "for log-matching on
+the user's own server." That reasoning was wrong — **all** external
+IP-intel services this tool queries (ipify, 2ip.me, ipinfo.io,
+sypexgeo, ip-api.com, ipapi.is, etc.) also log User-Agent strings, and
+anyone with access to those logs (a censor, or the service operator
+under subpoena / informal request) could do `grep ByeByeVPN` and
+enumerate the set of source IPs belonging to people running this
+scanner. On plain-HTTP services a transit-layer observer (ТСПУ) sees
+the marker in cleartext even without server cooperation.
+
+The threat model an auditor raised was explicit: *"a backdoored utility
+distributed to collect user IPs would do exactly this — embed a unique
+marker in outgoing requests so the attacker can `grep` the logs of the
+services the tool hits and enumerate users."* v2.5 closes that door
+end-to-end.
+
+Every outbound HTTP request the tool emits — to third-party IP-intel
+services, to the target under test during the TLS-HTTP audit probe,
+and to CT endpoints (`crt.sh`) — now sends the **full** Chrome-131 /
+Windows 10 header set in the exact order a real browser emits it:
+
+```
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)
+            AppleWebKit/537.36 (KHTML, like Gecko)
+            Chrome/131.0.0.0 Safari/537.36
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,
+        image/avif,image/webp,image/apng,*/*;q=0.8,
+        application/signed-exchange;v=b3;q=0.7
+Accept-Language: en-US,en;q=0.9
+Accept-Encoding: gzip, deflate, br, zstd
+Sec-Fetch-Dest: document
+Sec-Fetch-Mode: navigate
+Sec-Fetch-Site: none
+Sec-Fetch-User: ?1
+Upgrade-Insecure-Requests: 1
+```
+
+Changed files:
+
+* `http_get()` wrapper (`src/byebyevpn.cpp` ~L387) — WinHTTP session
+  name was `ByeByeVPN/2.5`, now `Mozilla/5.0`; request headers are
+  now the full Chrome set above (previously just `UA + Accept: */*`).
+
+* TLS-over-HTTP active audit probe (`src/byebyevpn.cpp` ~L1425) —
+  same header set; previously emitted `UA with ByeByeVPN/2.3` plus
+  `Accept: */*`.
+
+Net effect: **no outbound HTTP request — to any service, over any
+protocol — carries a tool-identifying string anywhere in headers,
+paths, or bodies**. A censor or log-aggregating service has no
+`grep`-able way to enumerate scanner users from its access logs.
+
+No operator-log marker is provided. If you want to separate scanner
+traffic in your own nginx `access.log`, correlate by source IP and
+timestamp with the scanner's own verbose output (`-v`), which prints
+each URL + timing. Fingerprinting your own traffic should be done at
+your server (where you control the correlation), not by giving a
+unique outgoing fingerprint to the entire internet.
+
+### Audit-verified: zero tool-identifying bytes on the wire
+
+Running `grep -E 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex'` on the full
+source tree now matches only three lines, all non-network:
+
+1. Source file banner comment (`// ByeByeVPN — full VPN…`, L1)
+2. An explanatory comment inside `http_get()` documenting *why* the UA
+   was scrubbed (L402)
+3. The CLI `--help` printf that displays the tool's name on the local
+   terminal (L4974)
+
+None of these three lines ever touches a socket.
+
+### Why this matters
+
+A clean protocol-body emission is how a real WireGuard / QUIC / TLS /
+L2TP client actually looks on the wire. Any non-random constant in a
+field specified as random (ClientRandom, DCID, key material) is
+statistically distinguishable and contradicts the tool's own thesis that
+"a clean tunnel should be indistinguishable from a clean non-tunnel."
+v2.5 is what v2.4 should have been.
+
+### No behavioural change
+
+All detection logic, verdict engine, signal weights and pipeline phases
+are identical to v2.4. Only the raw byte contents of probe payloads
+changed. Test surface on the target server is the same — DPI still sees
+"TLS ClientHello with invalid SNI", "QUIC Initial with unknown DCID",
+"L2TP SCCRQ with generic hostname", etc.
+
+---
+
 ## v2.4 — 2026-04-19
 
 v2.4 brings the full Russian ТСПУ methodology under one roof. The prior

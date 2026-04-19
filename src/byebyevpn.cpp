@@ -115,7 +115,7 @@ static void banner() {
     puts("|____/ \\__, |\\___|____/ \\__, |\\___| \\_/  |_|   |_| \\_|");
     puts("       |___/            |___/                          ");
     printf("%s", col(C::RST));
-    printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.4%s\n\n",
+    printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.5%s\n\n",
            col(C::DIM), col(C::RST));
 }
 
@@ -394,7 +394,13 @@ static HttpResp http_get(const string& url, int timeout_ms = 7000) {
     std::wstring wurl = s2ws(url);
     if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &u)) { r.err = "bad url"; return r; }
 
-    HINTERNET hS = WinHttpOpen(L"ByeByeVPN/2.4", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+    // v2.5 — WinHTTP session name and outgoing User-Agent both scrubbed
+    // of any tool-identifying string. Outbound HTTP to 3rd-party IP-intel
+    // services (ipify, 2ip.me, ipinfo, sypexgeo, etc.) now looks exactly
+    // like a regular Chrome-on-Windows request. A censor observing these
+    // probes in cleartext (or a service operator logging UA strings)
+    // cannot `grep ByeByeVPN` to enumerate scanner users.
+    HINTERNET hS = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hS) { r.err = "open"; return r; }
     WinHttpSetTimeouts(hS, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
@@ -405,7 +411,22 @@ static HttpResp http_get(const string& url, int timeout_ms = 7000) {
                                       WINHTTP_NO_REFERER,
                                       WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hR) { r.err = "req"; WinHttpCloseHandle(hC); WinHttpCloseHandle(hS); return r; }
-    std::wstring hdrs = L"User-Agent: Mozilla/5.0 ByeByeVPN\r\nAccept: */*\r\n";
+    // Full Chrome-on-Win10 header set — byte-identical to what a real Chrome
+    // browser would emit for a GET request. Order matters: real browsers emit
+    // headers in a consistent order, and any deviation (e.g. Accept before
+    // User-Agent) is itself a fingerprint.
+    std::wstring hdrs =
+        L"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        L"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\r\n"
+        L"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
+        L"image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7\r\n"
+        L"Accept-Language: en-US,en;q=0.9\r\n"
+        L"Accept-Encoding: gzip, deflate, br, zstd\r\n"
+        L"Sec-Fetch-Dest: document\r\n"
+        L"Sec-Fetch-Mode: navigate\r\n"
+        L"Sec-Fetch-Site: none\r\n"
+        L"Sec-Fetch-User: ?1\r\n"
+        L"Upgrade-Insecure-Requests: 1\r\n";
     if (!WinHttpSendRequest(hR, hdrs.c_str(), (DWORD)-1L, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
         !WinHttpReceiveResponse(hR, nullptr)) {
         r.err = "io " + std::to_string(GetLastError());
@@ -1413,8 +1434,19 @@ static HttpsProbe https_probe(const string& ip, int port, const string& host_hdr
         return r;
     }
     r.tls_ok = true;
-    string req = "GET / HTTP/1.1\r\nHost: " + (host_hdr.empty()?string("example.com"):host_hdr) +
-                 "\r\nUser-Agent: Mozilla/5.0 (compatible; ByeByeVPN/2.3)\r\nAccept: */*\r\n"
+    // Full Chrome-on-Win10 header set — matches http_get() for consistency
+    // across every outbound request the tool emits.
+    string req = "GET / HTTP/1.1\r\nHost: " + (host_hdr.empty()?string("example.com"):host_hdr) + "\r\n"
+                 "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\r\n"
+                 "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
+                 "image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7\r\n"
+                 "Accept-Language: en-US,en;q=0.9\r\n"
+                 "Accept-Encoding: gzip, deflate\r\n"
+                 "Sec-Fetch-Dest: document\r\n"
+                 "Sec-Fetch-Mode: navigate\r\n"
+                 "Sec-Fetch-Site: none\r\n"
+                 "Upgrade-Insecure-Requests: 1\r\n"
                  "Connection: close\r\n\r\n";
     SSL_write(ssl, req.data(), (int)req.size());
     // Collect up to ~4KB of response
@@ -1769,8 +1801,11 @@ static vector<J3Result> j3_probes(const string& host, int port) {
         out.push_back(j3_send(host, port, "HTTP CONNECT", req.data(), (int)req.size()));
     }
     // 4) SSH banner (server-in-client-role)
+    // Use a realistic OpenSSH banner so the probe can't be identified as a
+    // tool-specific scanner; DPI classifies it as a normal SSH handshake
+    // attempt, which is what we want to measure.
     {
-        string req = "SSH-2.0-ByeByeVPN\r\n";
+        string req = "SSH-2.0-OpenSSH_8.9p1\r\n";
         out.push_back(j3_send(host, port, "SSH banner", req.data(), (int)req.size()));
     }
     // 5) 512 random bytes
@@ -1780,16 +1815,19 @@ static vector<J3Result> j3_probes(const string& host, int port) {
     }
     // 6) TLS ClientHello minimal (TLS1.0 wrapping, random SNI)
     {
-        // handcrafted minimal TLS 1.0 ClientHello with a random SNI "foo.invalid"
-        static const unsigned char hello[] = {
+        // handcrafted minimal TLS 1.0 ClientHello with SNI "foo.invalid".
+        // ClientRandom (32 bytes) is filled with RAND_bytes() at runtime so
+        // every probe carries a fresh, actually-random value — same as any
+        // real TLS client — and we emit zero protocol-layer fingerprint.
+        unsigned char hello[] = {
             0x16,0x03,0x01,0x00,0x70,     // TLS record: handshake, 0x70 len
             0x01,0x00,0x00,0x6c,          // handshake: client_hello, len 0x6c
             0x03,0x03,                    // TLS 1.2
-            // 32 bytes random
-            0x52,0x55,0x53,0x53,0x49,0x41,0x4e,0x00,
-            0x42,0x59,0x45,0x42,0x59,0x45,0x56,0x50,
-            0x4e,0x41,0x43,0x54,0x49,0x56,0x45,0x50,
-            0x52,0x4f,0x42,0x45,0x4a,0x33,0x00,0x00,
+            // 32 bytes ClientRandom (filled by RAND_bytes below)
+            0,0,0,0,0,0,0,0,
+            0,0,0,0,0,0,0,0,
+            0,0,0,0,0,0,0,0,
+            0,0,0,0,0,0,0,0,
             0x00,                         // session id len
             0x00,0x02,                    // cipher suites len
             0x13,0x02,                    // TLS_AES_256_GCM_SHA384
@@ -1804,6 +1842,8 @@ static vector<J3Result> j3_probes(const string& host, int port) {
             0x00,0x2b,0x00,0x03, 0x02,0x03,0x04,
             0x00,0x33,0x00,0x02, 0x00,0x00
         };
+        // ClientRandom starts right after the TLS 1.2 version bytes (offset 11)
+        RAND_bytes(hello + 11, 32);
         out.push_back(j3_send(host, port, "TLS CH invalid-SNI", hello, (int)sizeof(hello)));
     }
     // 7) HTTP/1.0 proxy request with absolute URL
@@ -1922,17 +1962,19 @@ static J3Analysis j3_analyze(const vector<J3Result>& probes) {
 // QUIC (HTTP/3) initial probe on UDP/443
 // ============================================================================
 static UdpResult quic_probe(const string& host, int port) {
-    // Minimal QUIC v1 Initial with CRYPTO frame (bogus but valid length) → should trigger Version Negotiation or retry
-    static const unsigned char pkt[] = {
+    // Minimal QUIC v1 Initial with CRYPTO frame (bogus but valid length) → should trigger Version Negotiation or retry.
+    // DCID is filled with RAND_bytes() per-probe so it looks like a real QUIC client connection ID.
+    unsigned char pkt[] = {
         0xc0,                        // long header, type Initial
         0x00,0x00,0x00,0x01,         // QUIC version 1
         0x08,                        // DCID len
-        0xBB,0xBB,0xBB,0xBB,0xBB,0xBB,0xBB,0xBB, // DCID
+        0,0,0,0,0,0,0,0,             // DCID (filled by RAND_bytes below)
         0x00,                        // SCID len
         0x00,                        // Token len
         0x44,0x40,                   // Length varint (1088)
         // payload (not real encryption — server should ignore / NEG)
     };
+    RAND_bytes(pkt + 6, 8);          // random 8-byte DCID
     vector<unsigned char> full(1200, 0x00);
     memcpy(full.data(), pkt, sizeof(pkt));
     return udp_probe(host, port, full.data(), (int)full.size(), 1500);
@@ -2731,7 +2773,9 @@ static TraceResult trace_hops(const string& target_ip, int max_hops = 18) {
     HANDLE h = IcmpCreateFile();
     if (h == INVALID_HANDLE_VALUE) return r;
 
-    const char payload[] = "ByeByeVPN";
+    // Standard Windows ping payload (32 bytes, identical to what ping.exe sends)
+    // — no tool-specific string, identical to what any Windows user would emit.
+    const char payload[] = "abcdefghijklmnopqrstuvwabcdefghi";
     const DWORD rcvsz = sizeof(ICMP_ECHO_REPLY) + sizeof(payload) + 8 + 128;
     vector<unsigned char> rcv(rcvsz);
 
@@ -2800,11 +2844,12 @@ static UdpResult hysteria2_probe(const string& host, int port) {
     // The *difference* between hysteria and vanilla on :36712 is the
     // diagnostic. We just send the vanilla payload here and caller
     // compares with QUIC-on-:443 to distinguish.
-    static const unsigned char pkt[] = {
+    unsigned char pkt[] = {
         0xc0, 0x00,0x00,0x00,0x01, 0x08,
-        0xA1,0xA2,0xA3,0xA4,0xA5,0xA6,0xA7,0xA8,
+        0,0,0,0,0,0,0,0,             // DCID (filled by RAND_bytes below)
         0x00, 0x00, 0x44,0x40
     };
+    RAND_bytes(pkt + 6, 8);          // random 8-byte DCID
     vector<unsigned char> full(1200, 0x00);
     memcpy(full.data(), pkt, sizeof(pkt));
     return udp_probe(host, port, full.data(), (int)full.size(), 1500);
@@ -2828,6 +2873,8 @@ static UdpResult tuic_probe(const string& host, int port) {
 static UdpResult l2tp_probe(const string& host, int port) {
     // Minimal SCCRQ with mandatory AVPs: Message Type, Protocol Version,
     // Framing/Bearer Caps, Host Name, Assigned Tunnel ID.
+    // Host Name AVP contains a generic 3-char value — a real L2TP server
+    // doesn't use this for routing, it's just a required field.
     unsigned char pkt[] = {
         0xC8,0x02,       // flags (T/L/S/O/P/Ver=2)
         0x00,0x2D,       // length = 45
@@ -2841,8 +2888,8 @@ static UdpResult l2tp_probe(const string& host, int port) {
         0x80,0x08, 0x00,0x00, 0x00,0x02, 0x01,0x00,
         // AVP 3: Framing Capabilities (Sync+Async)
         0x80,0x0A, 0x00,0x00, 0x00,0x03, 0x00,0x00,0x00,0x03,
-        // AVP 4: Host Name = "BBV"
-        0x80,0x0B, 0x00,0x00, 0x00,0x07, 'B','B','V',
+        // AVP 4: Host Name = "lac" (generic L2TP Access Concentrator)
+        0x80,0x0B, 0x00,0x00, 0x00,0x07, 'l','a','c',
         // AVP 5: Assigned Tunnel ID = 1
         0x80,0x08, 0x00,0x00, 0x00,0x09, 0x00,0x01
     };

@@ -1,5 +1,87 @@
 # Changelog
 
+## v2.5.2 — 2026-04-20
+
+Second audit-follow-up pass after a community deep-dive turned up four
+more protocol-layer constants I had missed in the v2.5 scrub, all in the
+same class as the bytes v2.5 cleaned (constant values in fields a real
+client would randomize). v2.5.2 closes them and adds opt-out flags for
+the behavioural-fingerprint surfaces that can't be closed at the
+per-byte layer.
+
+Thanks again to the ntc.party reviewer for the catch.
+
+### Protocol-layer constants → randomized
+
+* **DNS probe transaction ID** (`src/byebyevpn.cpp` ~L2072) — was
+  hardcoded `0xBEEF`. RFC 5452 literally requires DNS resolvers to
+  randomize the txn ID for cache-poisoning resistance; a constant
+  0xBEEF was both a tool signature and protocol-incorrect. Now
+  `RAND_bytes(q, 2)` per probe.
+
+* **OpenVPN HARD_RESET timestamp** (`src/byebyevpn.cpp` ~L2029) — was
+  `time(nullptr)` verbatim, meaning the session-creation timestamp
+  exactly matched packet emission time. Real OpenVPN clients stamp the
+  session at session object creation and emit the first packet some
+  milliseconds to seconds later. Now `time(nullptr) - rand(0..255)`
+  seconds.
+
+* **L2TP SCCRQ Assigned Tunnel ID** (`src/byebyevpn.cpp` ~L2946) —
+  was fixed `0x0001`. Real L2TP clients allocate tunnel IDs
+  pseudo-randomly from `[1, 0xFFFF]`. Now `RAND_bytes()` with a reject
+  on all-zero.
+
+* **TLS ClientHello SNI** (`src/byebyevpn.cpp` ~L1865) — was hardcoded
+  `foo.invalid`. The `.invalid` TLD stays (RFC 6761 guarantees
+  NXDOMAIN, which is the point of this probe), but the 3-char prefix
+  is now randomized per-probe (`a-z`). So each scan's invalid-SNI
+  probe sends a different hostname under `.invalid`, not the literal
+  `foo.invalid` signature.
+
+Note: the overall ClientHello shape (single cipher suite, OpenSSL-style
+extensions, no GREASE values) is still **not** Chrome-uTLS compatible.
+Full JA3-Chrome mimicry requires porting uTLS to C++, which is out of
+scope for a bugfix release — see `SECURITY.md §Known open threats`.
+
+### Stealth / privacy opt-out flags
+
+Four new CLI flags, all default OFF (full scan behaviour unchanged).
+They close the behavioural-fingerprint surfaces listed in
+`SECURITY.md §Known open threats`:
+
+* `--stealth` — master toggle. Equivalent to `--no-geoip --no-ct
+  --udp-jitter` at once. For scanning your own VPS without leaking the
+  event to 3rd parties.
+* `--no-geoip` — skip all 9 3rd-party GeoIP/ASN lookups (ipapi.is,
+  iplocate.io, freeipapi.com, 2ip.io/2ip.me, ip-api.com/ru,
+  sypexgeo.net, ip-api.com, ipwho.is, ipinfo.io). None of them will
+  have a log line correlating your source IP with the target IP you're
+  scanning.
+* `--no-ct` — skip crt.sh Certificate Transparency lookup. Cert SHA256
+  of whatever TLS services the target runs stays local.
+* `--udp-jitter` — add a 50-300ms random delay before each UDP probe
+  (inside `udp_probe()`). Breaks the "one source IP hit 12 canonical
+  VPN ports in a 2-second window" burst signature into a
+  ~3-4-second smear. Not a complete fix — the port set itself is still
+  unusual — but removes the trivial timing rule.
+
+### Updated `--help`
+
+New "Stealth / privacy" section lists all four flags with one-line
+explanations of what each leak they close.
+
+### What v2.5.2 does NOT do
+
+See `SECURITY.md` table for the full list. Headline items remaining:
+
+* TLS JA3 ≠ Chrome even with `--stealth` — needs uTLS port.
+* Scanning a target from the same source IP repeatedly still
+  correlates across scans — that's inherent.
+* Build is still not byte-reproducible — needs Dockerfile.build.
+* No Authenticode, no GPG-signed commits — needs certs/keys.
+
+---
+
 ## v2.5.1 — 2026-04-20
 
 Audit-driven cleanup pass on top of v2.5. No new features, no

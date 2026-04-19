@@ -76,6 +76,14 @@ static bool g_verbose  = false;
 static int  g_threads  = 500;
 static int  g_tcp_to   = 800;
 static int  g_udp_to   = 900;
+// Stealth / privacy opt-outs (all default off = full scanner behaviour).
+// Documented in SECURITY.md §Known open threats — these toggle the
+// inherent behavioural-fingerprint surfaces that can't be closed at the
+// per-byte layer.
+static bool g_stealth    = false;  // master toggle: implies no-geoip + no-ct + udp-jitter
+static bool g_no_geoip   = false;  // skip all 9 3rd-party GeoIP services
+static bool g_no_ct      = false;  // skip crt.sh Certificate Transparency lookups
+static bool g_udp_jitter = false;  // add 50-300ms random delay between UDP probes
 
 // port-scan mode
 enum class PortMode { FULL, FAST, RANGE, LIST };
@@ -115,7 +123,7 @@ static void banner() {
     puts("|____/ \\__, |\\___|____/ \\__, |\\___| \\_/  |_|   |_| \\_|");
     puts("       |___/            |___/                          ");
     printf("%s", col(C::RST));
-    printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.5.1%s\n\n",
+    printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.5.2%s\n\n",
            col(C::DIM), col(C::RST));
 }
 
@@ -335,6 +343,18 @@ static UdpResult udp_probe(const string& host, int port,
                            const unsigned char* payload, int plen,
                            int timeout_ms) {
     UdpResult r;
+    // v2.5.2 — optional jitter. Without jitter every scan emits all 12 VPN-ish
+    // UDP probes within ~2 seconds, and that "one source IP hits 12 canonical
+    // VPN ports in a 2-second window" burst is itself a scanner signature
+    // independent of any per-byte marker. A 50-300ms random delay between
+    // probes spreads the burst across ~3-4 seconds and smears the timing
+    // envelope. Not a complete fix (a determined IDS still spots the unusual
+    // port set), but it removes the trivial "exactly N probes in T ms" rule.
+    if (g_udp_jitter) {
+        unsigned char jb = 0;
+        RAND_bytes(&jb, 1);
+        Sleep(50 + (jb % 251));   // 50-300 ms
+    }
     auto t0 = std::chrono::steady_clock::now();
     addrinfo hints{}; hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_DGRAM;
     addrinfo* ai = nullptr;
@@ -1819,10 +1839,14 @@ static vector<J3Result> j3_probes(const string& host, int port) {
     }
     // 6) TLS ClientHello minimal (TLS1.0 wrapping, random SNI)
     {
-        // handcrafted minimal TLS 1.0 ClientHello with SNI "foo.invalid".
-        // ClientRandom (32 bytes) is filled with RAND_bytes() at runtime so
-        // every probe carries a fresh, actually-random value — same as any
-        // real TLS client — and we emit zero protocol-layer fingerprint.
+        // handcrafted minimal TLS 1.0 ClientHello with a 3-char-prefix
+        // randomized SNI under .invalid TLD (RFC 6761 guarantees .invalid
+        // resolves to NXDOMAIN on any real client, so the TLD choice is
+        // safe; the 3-char prefix is randomized per-probe so the SNI is
+        // not a constant signature). Full ClientHello shape (single
+        // cipher, extension set) is still OpenSSL-style rather than
+        // uTLS-Chrome — see SECURITY.md "known open threats" for the
+        // full-JA3-mimicry roadmap item.
         unsigned char hello[] = {
             0x16,0x03,0x01,0x00,0x70,     // TLS record: handshake, 0x70 len
             0x01,0x00,0x00,0x6c,          // handshake: client_hello, len 0x6c
@@ -1838,7 +1862,7 @@ static vector<J3Result> j3_probes(const string& host, int port) {
             0x01,0x00,                    // compression: null
             // extensions
             0x00,0x41,
-            0x00,0x00,0x00,0x10, 0x00,0x0e, 0x00,0x00,0x0b,'f','o','o','.','i','n','v','a','l','i','d',
+            0x00,0x00,0x00,0x10, 0x00,0x0e, 0x00,0x00,0x0b, 0,0,0,'.','i','n','v','a','l','i','d',
             0x00,0x10,0x00,0x0b, 0x00,0x09, 0x08,'h','t','t','p','/','1','.','1',
             0x00,0x0b,0x00,0x02, 0x01,0x00,
             0x00,0x0a,0x00,0x04, 0x00,0x02,0x00,0x1d,
@@ -1848,6 +1872,25 @@ static vector<J3Result> j3_probes(const string& host, int port) {
         };
         // ClientRandom starts right after the TLS 1.2 version bytes (offset 11)
         RAND_bytes(hello + 11, 32);
+        // Randomize the 3-char prefix of the SNI value. The SNI extension
+        // payload lives at offset 9 from the start of the SNI extension.
+        // Locate it by the two null server-name-list-length bytes that
+        // precede the actual name length + name bytes.
+        // In the hello[] above, the name bytes are the 3 zero slots
+        // immediately before '.','i','n','v','a','l','i','d'. Patch them.
+        for (size_t i = 11 + 32; i + 11 <= sizeof(hello); ++i) {
+            // Find the ".invalid" literal; the 3 bytes before it are the
+            // ones we randomize.
+            if (hello[i]   == '.' && hello[i+1] == 'i' && hello[i+2] == 'n' &&
+                hello[i+3] == 'v' && hello[i+4] == 'a' && hello[i+5] == 'l' &&
+                hello[i+6] == 'i' && hello[i+7] == 'd' && i >= 3) {
+                unsigned char r[3]; RAND_bytes(r, 3);
+                hello[i-3] = 'a' + (r[0] % 26);
+                hello[i-2] = 'a' + (r[1] % 26);
+                hello[i-1] = 'a' + (r[2] % 26);
+                break;
+            }
+        }
         out.push_back(j3_send(host, port, "TLS CH invalid-SNI", hello, (int)sizeof(hello)));
     }
     // 7) HTTP/1.0 proxy request with absolute URL
@@ -1994,7 +2037,14 @@ static UdpResult openvpn_probe(const string& host, int port) {
     pkt[9] = 0x00;            // packet id array len
     unsigned int pid = htonl(0);
     memcpy(pkt+10, &pid, 4);  // packet id
-    unsigned int ts = htonl((unsigned int)time(nullptr));
+    // Session-creation timestamp. A real OpenVPN client stamps this
+    // several seconds/minutes before actually emitting the packet, so
+    // a timestamp that exactly matches the arrival time is a tool
+    // fingerprint. We subtract a small random offset (0..300s) to
+    // match the distribution of real clients.
+    unsigned char rnd_off = 0;
+    RAND_bytes(&rnd_off, 1);
+    unsigned int ts = htonl((unsigned int)time(nullptr) - (unsigned int)rnd_off);
     memcpy(pkt+14, &ts, 4);   // timestamp
     RAND_bytes(pkt+18, 8);    // some padding
     return udp_probe(host, port, pkt, sizeof(pkt), 1200);
@@ -2031,12 +2081,17 @@ static UdpResult ike_probe(const string& host, int port) {
 // DNS UDP/53 probe — A query for example.com
 // ============================================================================
 static UdpResult dns_probe(const string& host, int port) {
-    // txn id 0xBEEF, flags standard query, 1 question: example.com A
-    static const unsigned char q[] = {
-        0xBE,0xEF, 0x01,0x00, 0x00,0x01, 0x00,0x00, 0x00,0x00, 0x00,0x00,
+    // Standard DNS query, 1 question: example.com A.
+    // Transaction ID is randomized per-probe via RAND_bytes() — RFC 5452
+    // requires a real resolver to randomize txn ID for cache-poisoning
+    // resistance, so a hardcoded constant (e.g. 0xBEEF) is both a tool
+    // fingerprint AND protocol-incorrect.
+    unsigned char q[] = {
+        0,0,        0x01,0x00, 0x00,0x01, 0x00,0x00, 0x00,0x00, 0x00,0x00,
         0x07,'e','x','a','m','p','l','e', 0x03,'c','o','m', 0x00,
         0x00,0x01, 0x00,0x01
     };
+    RAND_bytes(q, 2);   // random txn ID
     return udp_probe(host, port, q, sizeof(q), 1200);
 }
 
@@ -2879,6 +2934,8 @@ static UdpResult l2tp_probe(const string& host, int port) {
     // Framing/Bearer Caps, Host Name, Assigned Tunnel ID.
     // Host Name AVP contains a generic 3-char value — a real L2TP server
     // doesn't use this for routing, it's just a required field.
+    // Tunnel ID is randomized per-probe: a constant "1" is a tool
+    // fingerprint, real clients allocate tunnel IDs pseudo-randomly.
     unsigned char pkt[] = {
         0xC8,0x02,       // flags (T/L/S/O/P/Ver=2)
         0x00,0x2D,       // length = 45
@@ -2894,9 +2951,15 @@ static UdpResult l2tp_probe(const string& host, int port) {
         0x80,0x0A, 0x00,0x00, 0x00,0x03, 0x00,0x00,0x00,0x03,
         // AVP 4: Host Name = "lac" (generic L2TP Access Concentrator)
         0x80,0x0B, 0x00,0x00, 0x00,0x07, 'l','a','c',
-        // AVP 5: Assigned Tunnel ID = 1
-        0x80,0x08, 0x00,0x00, 0x00,0x09, 0x00,0x01
+        // AVP 5: Assigned Tunnel ID = random (filled below)
+        0x80,0x08, 0x00,0x00, 0x00,0x09, 0,0
     };
+    // Randomize assigned tunnel id (last 2 bytes of last AVP).
+    // Keep it in [1, 0xFFFF] to stay a valid tunnel id.
+    unsigned char tid[2];
+    do { RAND_bytes(tid, 2); } while (tid[0] == 0 && tid[1] == 0);
+    pkt[sizeof(pkt)-2] = tid[0];
+    pkt[sizeof(pkt)-1] = tid[1];
     return udp_probe(host, port, pkt, sizeof(pkt), 1500);
 }
 
@@ -3119,6 +3182,13 @@ static FullReport run_full_target(const string& target) {
     // 2) GeoIP — 3 EU + 3 RU + 3 global providers, all in parallel.
     //    Diversity matters: EU and RU providers often disagree on hosting/
     //    VPN flags and the disagreement itself is diagnostic.
+    //    --stealth / --no-geoip skips this phase entirely: every 3rd-party
+    //    lookup leaks the target IP to the service. If you're scanning
+    //    your own VPS and don't want those log lines to exist, skip it.
+    if (g_no_geoip) {
+        printf("\n%s[2/8] GeoIP%s  SKIPPED (--no-geoip / --stealth)\n",
+               col(C::BOLD), col(C::RST));
+    } else {
     printf("\n%s[2/8] GeoIP%s  (9 providers in parallel: 3 EU / 3 RU / 3 global)\n",
            col(C::BOLD), col(C::RST));
     auto fg_eu1 = std::async(std::launch::async, geo_ipapi_is,   R.dns.primary_ip); // EU (Latvia)
@@ -3134,6 +3204,7 @@ static FullReport run_full_target(const string& target) {
     R.geos.push_back(fg_ru1.get()); R.geos.push_back(fg_ru2.get()); R.geos.push_back(fg_ru3.get());
     R.geos.push_back(fg_gl1.get()); R.geos.push_back(fg_gl2.get()); R.geos.push_back(fg_gl3.get());
     for (auto& g: R.geos) print_geo(g);
+    }
 
     // 3) TCP scan
     auto _ports = build_tcp_ports();
@@ -3285,6 +3356,13 @@ static FullReport run_full_target(const string& target) {
                     // ALWAYS in CT logs (RFC 9162, enforced by Chrome/
                     // Firefox). Absence = cert never went through a public
                     // CA = private issuance / clone / LE-staging.
+                    // v2.5.2 — --no-ct / --stealth skips this lookup: each
+                    // query sends the target cert SHA256 to crt.sh, which
+                    // then logs "source IP X asked about cert Y at T".
+                    if (g_no_ct) {
+                        printf("        %sCT-log (crt.sh): SKIPPED (--no-ct / --stealth)%s\n",
+                               col(C::DIM), col(C::RST));
+                    } else {
                     CtCheck ct = ct_check(sc.base_sha);
                     pf.ct = ct;
                     if (ct.queried && !ct.err.empty()) {
@@ -3297,6 +3375,7 @@ static FullReport run_full_target(const string& target) {
                         printf("        %sCT-log (crt.sh): cert NOT found in public CT logs — self-signed / private-CA / LE-staging / forged cert%s\n",
                                col(C::RED), col(C::RST));
                     }
+                    }  // end else for g_no_ct
                 }
                 // v2.3 — active HTTP-over-TLS probe: what does the origin
                 // actually emit as an HTTP reply? Real nginx → 'HTTP/1.1 200
@@ -4999,6 +5078,12 @@ static void help() {
     printf("  --udp-to MS     UDP recv timeout         (default 900)\n");
     printf("  --no-color      disable ANSI colors\n");
     printf("  -v / --verbose  verbose\n\n");
+    printf("Stealth / privacy (opt-outs for 3rd-party-service leakage and\n");
+    printf("behavioural-burst fingerprint — default OFF, full scan behaviour):\n");
+    printf("  --stealth       enable --no-geoip + --no-ct + --udp-jitter together\n");
+    printf("  --no-geoip      skip all 9 3rd-party GeoIP/ASN lookups (target IP stays local)\n");
+    printf("  --no-ct         skip crt.sh Certificate Transparency lookup (cert SHA stays local)\n");
+    printf("  --udp-jitter    add 50-300ms random delay between UDP probes (smears port burst)\n\n");
     printf("GeoIP sources (9 providers, 3 EU / 3 RU / 3 global):\n");
     printf("  EU:     ipapi.is, iplocate.io, freeipapi.com\n");
     printf("  RU:     2ip.io/2ip.me, ip-api.com/ru, sypexgeo.net\n");
@@ -5204,6 +5289,15 @@ int main(int argc, char** argv) {
         else if (a == "--threads" && i+1<argc) g_threads = atoi(argv[++i]);
         else if (a == "--tcp-to" && i+1<argc)  g_tcp_to  = atoi(argv[++i]);
         else if (a == "--udp-to" && i+1<argc)  g_udp_to  = atoi(argv[++i]);
+        else if (a == "--stealth") {
+            g_stealth = true;
+            g_no_geoip = true;
+            g_no_ct = true;
+            g_udp_jitter = true;
+        }
+        else if (a == "--no-geoip")  g_no_geoip = true;
+        else if (a == "--no-ct")     g_no_ct = true;
+        else if (a == "--udp-jitter") g_udp_jitter = true;
         else if (a == "--full")  g_port_mode = PortMode::FULL;
         else if (a == "--fast")  g_port_mode = PortMode::FAST;
         else if (a == "--range" && i+1<argc) {

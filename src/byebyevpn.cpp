@@ -123,7 +123,7 @@ static void banner() {
     puts("|____/ \\__, |\\___|____/ \\__, |\\___| \\_/  |_|   |_| \\_|");
     puts("       |___/            |___/                          ");
     printf("%s", col(C::RST));
-    printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.5.2%s\n\n",
+    printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.5.3%s\n\n",
            col(C::DIM), col(C::RST));
 }
 
@@ -425,6 +425,14 @@ static HttpResp http_get(const string& url, int timeout_ms = 7000) {
                                WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hS) { r.err = "open"; return r; }
     WinHttpSetTimeouts(hS, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
+    // v2.5.3 — enable automatic gzip/deflate decompression at the session
+    // level. Without this, our `Accept-Encoding: gzip, deflate` header
+    // gets sent (so the wire-shape stays Chrome-like) but the server's
+    // compressed response would arrive as raw gzip bytes that the
+    // downstream JSON parser can't read — half the GeoIP providers
+    // returned blank fields in v2.5/.1/.2 because of this.
+    DWORD decomp = WINHTTP_DECOMPRESSION_FLAG_GZIP | WINHTTP_DECOMPRESSION_FLAG_DEFLATE;
+    WinHttpSetOption(hS, WINHTTP_OPTION_DECOMPRESSION, &decomp, sizeof(decomp));
     HINTERNET hC = WinHttpConnect(hS, host, u.nPort, 0);
     if (!hC) { r.err = "connect"; WinHttpCloseHandle(hS); return r; }
     DWORD flags = (u.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
@@ -442,7 +450,12 @@ static HttpResp http_get(const string& url, int timeout_ms = 7000) {
         L"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
         L"image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7\r\n"
         L"Accept-Language: en-US,en;q=0.9\r\n"
-        L"Accept-Encoding: gzip, deflate, br, zstd\r\n"
+        // gzip+deflate only — Windows WinHTTP can auto-decompress those.
+        // br (brotli) and zstd would require shipping a brotli/zstd
+        // decoder; servers that only respond br/zstd would deliver bytes
+        // we couldn't parse. Chrome would advertise br/zstd too — minor
+        // fingerprint relaxation in exchange for reliable parsing.
+        L"Accept-Encoding: gzip, deflate\r\n"
         L"Sec-Fetch-Dest: document\r\n"
         L"Sec-Fetch-Mode: navigate\r\n"
         L"Sec-Fetch-Site: none\r\n"

@@ -1,5 +1,40 @@
 # Changelog
 
+## v2.5.3 — 2026-04-20
+
+Bugfix release. The Chrome-header set introduced in v2.5 included
+`Accept-Encoding: gzip, deflate, br, zstd`, but the WinHTTP-based
+`http_get()` wrapper never actually decompressed responses — so half
+the GeoIP providers (`ipapi.is`, `iplocate.io`, `freeipapi.com`,
+`ipwho.is`, `ipinfo.io`, the HTTPS ones) returned blank fields or
+timed out because the server-sent gzip/brotli body arrived as raw
+compressed bytes that the JSON parser couldn't read.
+
+### Fixes
+
+* **`http_get()`** (`src/byebyevpn.cpp` ~L427) — enable
+  **`WINHTTP_OPTION_DECOMPRESSION`** with `GZIP | DEFLATE` flags right
+  after `WinHttpOpen()`. WinHTTP now transparently decompresses the
+  response body for the downstream parser.
+
+* **`Accept-Encoding` header** trimmed from `gzip, deflate, br, zstd`
+  to **`gzip, deflate`** — the two encodings WinHTTP can decode
+  natively. Brotli and zstd would require shipping their respective
+  decoders. This is a minor fingerprint relaxation (real Chrome would
+  advertise br/zstd too), but the alternative is broken parsing on
+  any server that picks brotli over gzip.
+
+### Effect
+
+Re-running a full scan now populates all 9 GeoIP providers correctly
+(network errors and rate-limits aside). Reality-cert / CT-log lookup
+through `crt.sh` (also gzipped by default) likewise works again.
+
+No changes to detection logic, scoring, or any protocol-level probes.
+Pure HTTP-client plumbing.
+
+---
+
 ## v2.5.2 — 2026-04-20
 
 Second audit-follow-up pass after a community deep-dive turned up four

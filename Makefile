@@ -36,12 +36,13 @@ windows: $(SRC)
 # -----------------------------------------------------------------
 windows-static: $(SRC)
 	$(CXX) $(CXXFLAGS) -D_WIN32_WINNT=0x0A00 \
-	    -static-libgcc -static-libstdc++ \
-	    -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic \
+	    -static \
 	    $< -o $(BIN).exe \
 	    $(WIN_OSSL_DIR)/libssl.a $(WIN_OSSL_DIR)/libcrypto.a \
 	    $(WIN_SYS_LIBS)
-	@echo "=> $(BIN).exe  (standalone — no DLLs required)"
+	@echo "=> $(BIN).exe  (OpenSSL + libwinpthread + libstdc++ baked in;"
+	@echo "    on Win10 1803+ runs as-is, on Win7/8 install UCRT redist:"
+	@echo "    https://www.microsoft.com/en-us/download/details.aspx?id=49093)"
 
 # -----------------------------------------------------------------
 # Linux static (glibc static is nasty; we do partial static: pthread + SSL)
@@ -55,7 +56,7 @@ static: $(SRC)
 # Output: byebyevpn-<VERSION>-win64.zip containing ONE runnable exe.
 # Override with:  make release-zip VERSION=v2.3
 # -----------------------------------------------------------------
-VERSION ?= v2.5.3
+VERSION ?= v2.5.4
 ZIP_NAME = $(BIN)-$(VERSION)-win64.zip
 
 release-zip: windows-static

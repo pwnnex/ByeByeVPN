@@ -1,5 +1,71 @@
 # Changelog
 
+## v2.5.4 — hotfix — 2026-04-20
+
+**Critical hotfix.** v2.5 / v2.5.1 / v2.5.2 / v2.5.3 release binaries
+were silently linked against OpenSSL DLLs (`libssl-3-x64.dll`,
+`libcrypto-3-x64.dll`) instead of being statically linked, despite the
+README and Makefile claiming "single self-contained .exe". Users who
+downloaded the release zip and ran the exe got "missing DLL" errors
+because the zip never shipped those DLLs. **Everyone on v2.5.x must
+re-download v2.5.4.**
+
+### Root cause
+
+The `build-win/libssl.a` and `build-win/libcrypto.a` files used by the
+build were **import libraries** (`.dll.a`-style stubs that resolve to
+DLL imports) renamed to `.a`, not real static archives. The build
+command `ld build-win/libssl.a build-win/libcrypto.a ...` therefore
+emitted `IMPORT` references to `libssl-3-x64.dll` and
+`libcrypto-3-x64.dll` rather than baking the OpenSSL code into the
+exe. `objdump -p byebyevpn.exe | grep 'DLL Name'` on the v2.5.3 binary
+shows the smoking gun.
+
+Fix:
+
+* `build-win/libssl.a` / `build-win/libcrypto.a` replaced with real
+  static archives from msys2's `mingw-w64-ucrt-x86_64-openssl-3.6.1`
+  package (`/ucrt64/lib/libssl.a` ≈ 1.7 MB, `/ucrt64/lib/libcrypto.a`
+  ≈ 9.6 MB — actual machine code, not import stubs).
+* `Makefile` `windows-static` target switched from
+  `-static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic`
+  to a simple `-static` — the previous flag set was leaving
+  `libwinpthread-1.dll` as a dynamic dependency because the linker
+  preferred the system import lib over the static archive at the same
+  path. `-static` forces the static archive everywhere it's available.
+* `BUILD.md` updated with verification steps:
+  `objdump -p byebyevpn.exe | grep "DLL Name"` should show only OS
+  DLLs (KERNEL32, USER32, WS2_32, IPHLPAPI, WINHTTP, CRYPT32, ADVAPI32)
+  plus `api-ms-win-crt-*` (UCRT). **No** `libssl-*` / `libcrypto-*` /
+  `libwinpthread-*` / `libgcc_*` / `libstdc++-*` should appear.
+
+### Effect
+
+* Release exe size grew from ≈ 1.1 MB to ≈ 8.5 MB — that's the OpenSSL
+  code now actually inside the binary.
+* Zip is `byebyevpn-v2.5.4-win64.zip` ≈ 2.6 MB (compressed).
+
+### Runtime requirement
+
+The binary now depends only on OS DLLs and the **Universal CRT**
+(`api-ms-win-crt-*.dll`). Universal CRT is built into Windows 10 1803+
+and Windows 11 by default. On older systems (Windows 7, 8, 8.1, or
+stripped Win10 LTSC variants), users may need to install the
+**Universal C Runtime** redistributable from Microsoft once:
+https://www.microsoft.com/en-us/download/details.aspx?id=49093
+
+This is documented in `README` and the `BUILD.md` verification block.
+
+### Apologies
+
+This regression was in every v2.5.x release zip up to and including
+v2.5.3. The issue went undetected because the build host had the
+OpenSSL DLLs in `PATH` from msys2, so the exe ran fine locally — only
+end-users without OpenSSL DLLs hit the error. Verifying the binary
+with `objdump -p` is now part of the release procedure.
+
+---
+
 ## v2.5.3 — 2026-04-20
 
 Bugfix release. The Chrome-header set introduced in v2.5 included

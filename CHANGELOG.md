@@ -1,5 +1,72 @@
 # Changelog
 
+## v2.5.5 - 2026-04-21
+
+fixes on top of the ntc.party thread
+(https://ntc.party/t/byebyevpn/24325, #5, #4).
+
+### headers (#5)
+
+the chrome-131 header blob was itself a static fingerprint - scanner
+users all emitted the same header order that no real browser actually
+sends. switched `http_get()` to zero extra headers on the wire: bare
+`GET /path HTTP/1.1` + `Host:`, nothing else. no ua, no accept,
+no accept-encoding, no sec-fetch, no upgrade-insecure. ip-intel
+endpoints all work on a plain GET, same as `curl -sS
+https://ipwho.is/8.8.8.8` with no flags.
+
+winhttp quirks: `WinHttpOpen(L"", ...)` still leaks a default ua on
+some builds, so we also force-override via `WINHTTP_OPTION_USER_AGENT`
+to empty, and send the request with `WINHTTP_NO_ADDITIONAL_HEADERS`.
+auto-gzip stays via `WINHTTP_OPTION_DECOMPRESSION` in case a server
+chooses gzip on its own.
+
+`https_probe()` (target audit): minimal `Host` + `Accept: */*`
++ `Connection: close`. `fp_http_plain()`: same.
+
+### 2ip.io (#5)
+
+2ip.io's anti-bot html page was breaking the parser. removed.
+`geo_2ip_ru()` hits `api.2ip.me/geo.json` directly now.
+
+### build (#4)
+
+- new `.github/workflows/release.yml` - tag push triggers a msys2
+  ucrt64 build, verifies `build-win/*.a` are bit-identical to the
+  pacman pkg, checks no mingw/openssl dll leaks via objdump, greps
+  source for tool-fingerprint strings, writes exe + zip sha256 into
+  the release body.
+- `build-win/libssl.a` + `libcrypto.a` now tracked in git and are
+  the real static archives from the public msys2 package.
+- openssl `3.6.1-3` -> `3.6.2-2` (current upstream).
+- `BUILD.md` sha256 match the actual msys2 pkg.
+
+### audit fixes
+
+- `fp_socks5`: 1-byte reply was reading `reply[1]` past end.
+- `main`: 9 error exits skipped `WSACleanup` - single `done:` label now.
+- `--threads`/`--tcp-to`/`--udp-to`: clamp negatives (would wrap
+  `SO_*TIMEO` to ~49 days).
+- `scan_tcp`: `open.size()` read outside the mutex - snapshot under
+  lock.
+- verdict engine: unreadable `!err.empty() == false` -> plain
+  `err.empty()`.
+
+### docs
+
+readme rewrite - dropped faq / marketing. new translations:
+`README.zh-CN.md` (simplified chinese), `README.fa.md` (persian, rtl).
+`SECURITY.md` pruned.
+
+### note on v2.5.4
+
+the v2.5.4 release binary was ~200 kb heavier than a clean public
+rebuild - can't fix that retroactively. v2.5.5+ comes out of the ci
+workflow with sha256 in the release body, so anyone can rebuild and
+diff.
+
+---
+
 ## v2.5.4 — hotfix — 2026-04-20
 
 **Critical hotfix.** v2.5 / v2.5.1 / v2.5.2 / v2.5.3 release binaries

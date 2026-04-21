@@ -1,108 +1,111 @@
 # Security policy
 
-## Reporting a vulnerability
+## Reporting
 
-If you've found a security issue in ByeByeVPN — a way the tool leaks
-information it shouldn't, a fingerprint that enumerates scanner users,
-a memory-safety bug in protocol parsing, a supply-chain concern, or
-anything else — please report it **before** publicly disclosing.
+Found a way the tool leaks something it shouldn't (fingerprint that
+enumerates scanner users, memory-safety bug in a parser, supply-chain
+concern, etc.)? Report before disclosing publicly.
 
-### Preferred channels
+**Channels:**
 
-1. **GitHub Security Advisory** — https://github.com/pwnnex/ByeByeVPN/security/advisories/new
-   — Private, auditable, integrates with the CVE process if needed.
+- [GitHub Security Advisory](https://github.com/pwnnex/ByeByeVPN/security/advisories/new)
+  - private, integrates with the CVE process
+- [GitHub Issues](https://github.com/pwnnex/ByeByeVPN/issues) - for
+  anything that's fine to discuss in public
+- [ntc.party/t/byebyevpn/24325](https://ntc.party/t/byebyevpn/24325) -
+  the public thread where most of the current audit discussion happens
 
-2. **ntc.party thread** — mention `@pwnnex` in the
-   [ByeByeVPN topic NOT AVAILABLE RIGHT NOW](https://ntc.party/) if the issue is minor and you
-   prefer open discussion. Anything sensitive should go via the
-   GitHub advisory path above, not the public thread.
+## In scope
 
-### What counts as "security-sensitive"
+- `src/byebyevpn.cpp` and everything in the repo
+- Release artifacts (exe + zip SHA256 on the release page)
+- Anything in the documented threat model below
 
-* **Fingerprinting** — any byte the tool emits that identifies it and
-  could be used to enumerate scanner users from external log sources.
-  This is the primary threat model (see
-  [README §On-the-wire posture](README.md#on-the-wire-posture-anti-fingerprinting-v25)).
-* **Memory safety** — buffer overflows / OOB reads in the HTTP response
-  parser, TLS parser, UDP probe reply decoder, or JSON parser (the tool
-  consumes attacker-controlled bytes from every target and every
-  IP-intel service).
-* **Information leaks** — paths where the target IP, the user's own IP,
-  or local system state is sent anywhere unexpected.
-* **Supply-chain** — compromised build artefacts, tampered release
-  zips, backdoored dependencies.
+## Out of scope
 
-### What we'd like in the report
-
-* Version (`byebyevpn --help` prints the version line).
-* Reproduction steps — exact command line or the probe sequence.
-* Packet capture (tcpdump/wireshark) if network-level.
-* The specific source line / commit / hex bytes if code-level.
-* Your suggested fix if you have one.
-
-### Response expectations
-
-This is a single-maintainer project. No SLAs. Realistic turnaround:
-
-* **Acknowledgement** — within ~72h (often faster).
-* **Fix in `main`** — as soon as root cause is understood; typically
-  hours to a couple of days for anything in the fingerprint class,
-  which is treated as urgent.
-* **Release** — pushed to `main` + tagged + release zip uploaded on the
-  same day as the fix lands.
-
-I'll credit you in the release notes and the CHANGELOG unless you ask
-me not to.
-
-## Scope
-
-**In scope** — anything in `src/byebyevpn.cpp`, `Makefile`, build
-configuration, release artefacts (exe + zip), documented threat model.
-
-**Out of scope**
-
-* Vulnerabilities in third-party IP-intel services the tool queries
-  (ipify, 2ip.me, ipinfo.io, sypexgeo, ip-api, ipapi.is, crt.sh). Report
-  those to the services directly.
-* General Windows, OpenSSL, or msys2 CVEs unless they have a specific
+- Bugs in third-party IP-intel services (ipapi.is, iplocate.io,
+  ip-api.com, ipwho.is, ipinfo.io, freeipapi.com, 2ip.me,
+  sypexgeo.net, crt.sh). Report those upstream.
+- General OpenSSL / Windows / msys2 CVEs, unless there's a specific
   exploitable path via this tool.
-* "You shouldn't scan servers you don't own" — that's an ethics /
-  legal concern, not a security bug in the tool.
-* Cosmetic issues (typos in help text, incorrect emoji rendering).
+- "Don't scan servers you don't own" - ethics/legal, not a security
+  bug.
 
-## Known open threats / limitations
+## Threat model
 
-These are **known** and **not** new findings. No need to report them —
-they're on the roadmap.
+The primary class is **fingerprinting**: any byte the tool emits
+that identifies it and could be used to enumerate scanner users
+from external log sources (a censor on the wire, a third-party
+service operator, or a log aggregator).
 
-| Threat                                   | Status  | Planned fix                                                    |
-|------------------------------------------|---------|----------------------------------------------------------------|
-| TLS JA3 ≠ Chrome even with Chrome UA     | open    | uTLS-Chrome ClientHello port (large rewrite, not imminent)     |
-| Behavioral burst (N IP-intel APIs at once) | open  | Configurable, fewer default calls, opt-in `--deep`             |
-| Not byte-reproducible build              | open    | `Dockerfile.build` + strip PE timestamps + build ID            |
-| No Authenticode code signing             | open    | Requires EV cert (~$300/yr); will sign if project gets funded  |
-| Unsigned git commits / tags              | open    | GPG-signing keys to be published in a future release           |
-| OpenSSL CVE requires rebuild             | inherent| Static linking trade-off — documented, re-release on CVE drop  |
-| Single-maintainer / bus factor           | inherent| Contributors welcome (see `README` contrib section)            |
+Secondary: memory safety in parsers that consume attacker-controlled
+bytes (HTTP response parser, TLS parser, UDP reply decoder, JSON
+scanner).
+
+## Known open threats
+
+These are known and tracked here; no need to report them.
+
+| Threat                                               | Status  | Plan                                                            |
+|------------------------------------------------------|---------|-----------------------------------------------------------------|
+| TLS JA3 != Chrome                                    | open    | Needs a uTLS-Chrome ClientHello port in C++ (large rewrite)     |
+| Behavioural burst: 9 IP-intel APIs hit in ~2s        | partial | Closed by `--stealth` / `--no-geoip`; still default-on          |
+| Build not byte-reproducible across envs              | partial | CI workflow pins msys2; strip PE timestamp + build-id TODO      |
+| No Authenticode code signing                         | open    | EV cert needed (~$300/yr)                                       |
+| Unsigned git commits/tags                            | open    | GPG keys pending                                                |
+| OpenSSL CVE requires rebuild                         | inherent| Static-link trade-off; re-release on CVE drop                   |
+| Single-source-IP repeat-scan correlation             | inherent| Can't be fixed at the tool layer; use a fresh upstream each run |
+
+## Recently closed
+
+- **Chrome-131 header block was itself a fingerprint**
+  ([#5](https://github.com/pwnnex/ByeByeVPN/issues/5)).
+  `http_get()` now sends **zero** tool-specific headers - no
+  `User-Agent`, no `Accept`, no `Accept-Language`, no
+  `Accept-Encoding`, no `Sec-Fetch-*`, no
+  `Upgrade-Insecure-Requests`. The WinHTTP session agent is empty
+  and `WINHTTP_OPTION_USER_AGENT` is force-overridden to empty to
+  cover WinHTTP defaults. `https_probe()` uses a minimal
+  `Host`+`Accept: */*`+`Connection: close` triple. IP-intel
+  endpoints all accept bare GETs (same as `curl -sS` without flags).
+- **2ip.io HTML-scraping path triggered anti-bot**
+  ([#5](https://github.com/pwnnex/ByeByeVPN/issues/5)). The provider
+  now uses `api.2ip.me/geo.json` directly - a plain JSON endpoint.
+- **BUILD.md SHA256 didn't match shipped archives**
+  ([#4](https://github.com/pwnnex/ByeByeVPN/issues/4)). `build-win/`
+  now contains the real msys2 static archives and the SHA256s in
+  BUILD.md are the actual msys2 pkg values. OpenSSL upgraded from
+  the stale `3.6.1-3` to the current upstream `3.6.2-2`; the
+  package hash, libssl.a hash, and libcrypto.a hash in BUILD.md
+  are reproducible from `pacman -S` or from the msys2 repo mirror
+  directly.
+- **Release binary provenance**. Releases are now produced by the
+  [CI workflow](.github/workflows/release.yml) from the exact same
+  msys2 image, with exe + zip SHA256 printed in each release's
+  notes.
+- **`fp_socks5` read beyond the received byte count when the server
+  replied with exactly one byte (uninitialized stack read)**. Now
+  guarded by `n >= 2`.
+- **`WSACleanup` skipped on several CLI error paths**. All paths
+  now fall through to `WSACleanup` via `goto done`.
+- **CLI accepted negative `--threads`, `--tcp-to`, `--udp-to`
+  values** (would wrap SO_TIMEO to ~49 days). Clamped to 1+.
+- **Scan-progress printer read `open.size()` outside the mutex**
+  (formal data race). Snapshot taken under lock.
 
 ## Coordinated disclosure
 
-For issues in the **fingerprinting** class specifically — where public
-disclosure before a fix could actively harm existing scanner users —
-please wait for the fixed release before publishing details. I'll work
-with you on the timeline, typically 1-3 days.
+For fingerprint-class issues where public disclosure before a fix
+could harm existing users, please wait for the patched release. For
+everything else, 90-day disclosure is fine.
 
-For all other issues, standard 90-day disclosure is fine; I'll
-usually move faster than that.
+## Verifying a build
 
-## Out-of-band verification
+```
+sha256sum byebyevpn.exe                                # compare with release notes
+sha256sum byebyevpn-v2.5.4-win64.zip                   # same
+sha256sum build-win/libssl.a build-win/libcrypto.a     # compare with BUILD.md
+```
 
-If you ever need to confirm a message claiming to be from the
-maintainer (for example, to verify a signed release), the authoritative
-channels are:
-
-* GitHub: https://github.com/pwnnex
-* The commit history of this repo (anything not signed by the
-  maintainer's pushes is not official)
-
-Thank you for making the tool safer.
+SHA mismatch on a release zip = a CDN or middlebox altered it, don't
+run it.

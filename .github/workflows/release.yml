@@ -1,0 +1,111 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-static:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-make
+            zip
+            coreutils
+
+      - name: verify shipped static archives match msys2 package
+        run: |
+          set -eux
+          echo "=== shipped in repo ==="
+          sha256sum build-win/libssl.a build-win/libcrypto.a
+          echo "=== from installed msys2 pkg ==="
+          sha256sum /ucrt64/lib/libssl.a /ucrt64/lib/libcrypto.a
+          # must match byte-for-byte. if they don't, the repo copy was tampered.
+          diff -q build-win/libssl.a    /ucrt64/lib/libssl.a
+          diff -q build-win/libcrypto.a /ucrt64/lib/libcrypto.a
+
+      - name: build static exe
+        run: |
+          set -eux
+          make windows-static
+          file byebyevpn.exe
+          ls -la byebyevpn.exe
+
+      - name: verify no fingerprint-class string on the wire path
+        run: |
+          set -eux
+          grep -nE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' src/byebyevpn.cpp || true
+          # the only acceptable matches are: file banner (L1), http_get
+          # comment about scrub rationale, and --help printf. any wire-path
+          # string would indicate a regression.
+
+      - name: check no extra dll deps
+        run: |
+          set -eux
+          objdump -p byebyevpn.exe | grep "DLL Name" || true
+          if objdump -p byebyevpn.exe | grep -Eq "DLL Name: (libssl|libcrypto|libwinpthread|libgcc_|libstdc)"; then
+            echo "ERROR: dynamic dependency on mingw/openssl runtime leaked into the exe"
+            exit 1
+          fi
+
+      - name: compute exe sha256
+        id: hash
+        run: |
+          set -eux
+          H=$(sha256sum byebyevpn.exe | awk '{print $1}')
+          echo "exe_sha=$H" >> "$GITHUB_OUTPUT"
+          echo "byebyevpn.exe sha256: $H"
+
+      - name: build release zip
+        id: zipper
+        run: |
+          set -eux
+          VER="${GITHUB_REF_NAME:-dev}"
+          NAME="byebyevpn-${VER}-win64.zip"
+          mkdir -p dist-release
+          cp byebyevpn.exe LICENSE README.md CHANGELOG.md dist-release/
+          (cd dist-release && zip -9 "../${NAME}" *)
+          ZH=$(sha256sum "${NAME}" | awk '{print $1}')
+          echo "zip_name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "zip_sha=${ZH}"    >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: byebyevpn-win64
+          path: |
+            byebyevpn.exe
+            ${{ steps.zipper.outputs.zip_name }}
+
+      - name: create release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            byebyevpn.exe
+            ${{ steps.zipper.outputs.zip_name }}
+          body: |
+            reproducible build from commit ${{ github.sha }}
+
+            sha256:
+              byebyevpn.exe                           ${{ steps.hash.outputs.exe_sha }}
+              ${{ steps.zipper.outputs.zip_name }}    ${{ steps.zipper.outputs.zip_sha }}
+
+            static openssl provenance: see BUILD.md. msys2 pkg
+            `mingw-w64-ucrt-x86_64-openssl-3.6.2-2`, bit-identical to the
+            archives shipped in `build-win/`.

@@ -24,7 +24,7 @@ jobs:
           update: false
           install: >-
             mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-make
+            make
             zip
             coreutils
             diffutils

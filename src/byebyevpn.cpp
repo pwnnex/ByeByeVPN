@@ -123,7 +123,7 @@ static void banner() {
     puts("|____/ \\__, |\\___|____/ \\__, |\\___| \\_/  |_|   |_| \\_|");
     puts("       |___/            |___/                          ");
     printf("%s", col(C::RST));
-    printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.5.4%s\n\n",
+    printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.5.5%s\n\n",
            col(C::DIM), col(C::RST));
 }
 
@@ -414,23 +414,14 @@ static HttpResp http_get(const string& url, int timeout_ms = 7000) {
     std::wstring wurl = s2ws(url);
     if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &u)) { r.err = "bad url"; return r; }
 
-    // v2.5 — WinHTTP session name and outgoing User-Agent both scrubbed
-    // of any tool-identifying string. Outbound HTTP to 3rd-party IP-intel
-    // services (ipify, 2ip.me, ipinfo, sypexgeo, etc.) now looks exactly
-    // like a regular Chrome-on-Windows request. A censor observing these
-    // probes in cleartext (or a service operator logging UA strings)
-    // cannot `grep ByeByeVPN` to enumerate scanner users.
-    // (WinHTTP session name doubles as a default UA prefix — kept neutral on purpose)
-    HINTERNET hS = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+    // no ua. bare GET, json endpoints don't need more. #5
+    HINTERNET hS = WinHttpOpen(L"", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hS) { r.err = "open"; return r; }
     WinHttpSetTimeouts(hS, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
-    // v2.5.3 — enable automatic gzip/deflate decompression at the session
-    // level. Without this, our `Accept-Encoding: gzip, deflate` header
-    // gets sent (so the wire-shape stays Chrome-like) but the server's
-    // compressed response would arrive as raw gzip bytes that the
-    // downstream JSON parser can't read — half the GeoIP providers
-    // returned blank fields in v2.5/.1/.2 because of this.
+    // force empty ua, winhttp sneaks a default one in otherwise
+    WinHttpSetOption(hS, WINHTTP_OPTION_USER_AGENT, (LPVOID)L"", 0);
+    // decode gzip if server sends it anyway
     DWORD decomp = WINHTTP_DECOMPRESSION_FLAG_GZIP | WINHTTP_DECOMPRESSION_FLAG_DEFLATE;
     WinHttpSetOption(hS, WINHTTP_OPTION_DECOMPRESSION, &decomp, sizeof(decomp));
     HINTERNET hC = WinHttpConnect(hS, host, u.nPort, 0);
@@ -440,28 +431,8 @@ static HttpResp http_get(const string& url, int timeout_ms = 7000) {
                                       WINHTTP_NO_REFERER,
                                       WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hR) { r.err = "req"; WinHttpCloseHandle(hC); WinHttpCloseHandle(hS); return r; }
-    // Full Chrome-on-Win10 header set — byte-identical to what a real Chrome
-    // browser would emit for a GET request. Order matters: real browsers emit
-    // headers in a consistent order, and any deviation (e.g. Accept before
-    // User-Agent) is itself a fingerprint.
-    std::wstring hdrs =
-        L"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        L"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\r\n"
-        L"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
-        L"image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7\r\n"
-        L"Accept-Language: en-US,en;q=0.9\r\n"
-        // gzip+deflate only — Windows WinHTTP can auto-decompress those.
-        // br (brotli) and zstd would require shipping a brotli/zstd
-        // decoder; servers that only respond br/zstd would deliver bytes
-        // we couldn't parse. Chrome would advertise br/zstd too — minor
-        // fingerprint relaxation in exchange for reliable parsing.
-        L"Accept-Encoding: gzip, deflate\r\n"
-        L"Sec-Fetch-Dest: document\r\n"
-        L"Sec-Fetch-Mode: navigate\r\n"
-        L"Sec-Fetch-Site: none\r\n"
-        L"Sec-Fetch-User: ?1\r\n"
-        L"Upgrade-Insecure-Requests: 1\r\n";
-    if (!WinHttpSendRequest(hR, hdrs.c_str(), (DWORD)-1L, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+    // no extra hdrs, winhttp writes Host on its own
+    if (!WinHttpSendRequest(hR, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
         !WinHttpReceiveResponse(hR, nullptr)) {
         r.err = "io " + std::to_string(GetLastError());
         WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
@@ -650,20 +621,11 @@ static GeoInfo geo_freeipapi(const string& ip) {
 // hosting differently from EU/US providers (VEESP, Hostkey, Ruvds etc.)
 // ----------------------------------------------------------------------------
 
-// 2ip.me / 2ip.ru  —  Russian IP-checker (HTTPS with proper UA)
-// api.2ip.me/geo.json returns 429 without a browser UA, so we go through
-// the HTML-less JSON endpoint with explicit Accept/UA (http_get already
-// sends Mozilla UA).
+// 2ip.io had anti-bot, using api.2ip.me instead. #5
 static GeoInfo geo_2ip_ru(const string& ip) {
-    GeoInfo g; g.source = "2ip.ru (RU)";
-    // Prefer HTTPS, fall back to HTTP. The .me endpoint tends to 429 with
-    // no-key access; the /geoip/ JSON on the main domain is more lenient.
-    string url = "https://2ip.io/geoip/" + ip + "/";
+    GeoInfo g; g.source = "2ip.me (RU)";
+    string url = "http://api.2ip.me/geo.json?ip=" + ip;
     auto r = http_get(url);
-    if (!r.ok() || r.body.find("country") == string::npos) {
-        url = "http://api.2ip.me/geo.json?ip=" + ip;
-        r = http_get(url);
-    }
     if (!r.ok()) { g.err = "http " + std::to_string(r.status) + " " + r.err; return g; }
     g.ip           = json_get_str(r.body, "ip");
     if (g.ip.empty()) g.ip = ip;
@@ -876,12 +838,14 @@ static vector<TcpOpen> scan_tcp(const string& host, const vector<int>& ports, in
             if (i >= ports.size()) break;
             TcpOpen o = probe_tcp(host, ports[i], to_ms);
             int d = ++done;
-            if (o.connect_ms >= 0) {
+            size_t cur = 0;
+            {
                 std::lock_guard<std::mutex> lk(mx);
-                open.push_back(std::move(o));
+                if (o.connect_ms >= 0) open.push_back(std::move(o));
+                cur = open.size();
             }
             if (d % 20 == 0 || (size_t)d == ports.size()) {
-                fprintf(stderr, "\r  scanning %d/%zu  open=%zu  ", d, ports.size(), open.size());
+                fprintf(stderr, "\r  scanning %d/%zu  open=%zu  ", d, ports.size(), cur);
                 fflush(stderr);
             }
         }
@@ -923,7 +887,7 @@ static FpResult fp_http_plain(const string& host, int port) {
     FpResult f; f.service = "HTTP?";
     string err; SOCKET s = tcp_connect(host, port, g_tcp_to, err);
     if (s == INVALID_SOCKET) { f.silent = true; return f; }
-    string req = "GET / HTTP/1.1\r\nHost: " + host + "\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n";
+    string req = "GET / HTTP/1.1\r\nHost: " + host + "\r\nAccept: */*\r\nConnection: close\r\n\r\n";
     tcp_send_all(s, req.data(), (int)req.size());
     char buf[2048]; int n = tcp_recv_to(s, buf, sizeof(buf)-1, 1500);
     closesocket(s);
@@ -982,13 +946,16 @@ static FpResult fp_socks5(const string& host, int port) {
     unsigned char reply[8]; int n = tcp_recv_to(s, (char*)reply, sizeof(reply), 1200);
     closesocket(s);
     if (n <= 0) { f.silent = true; return f; }
-    if (reply[0] == 0x05) {
+    if (reply[0] == 0x05 && n >= 2) {
         f.service = "SOCKS5";
-        f.details = "methods=0x" + hex_s(reply+1, std::min(1,n-1));
+        f.details = "methods=0x" + hex_s(reply+1, 1);
         if (reply[1] == 0x00) f.details += " (no-auth)";
         else if (reply[1] == 0x02) f.details += " (user/pass)";
         else if (reply[1] == 0xFF) f.details += " (no acceptable)";
         f.is_vpn_like = true;
+    } else if (reply[0] == 0x05) {
+        // 1-byte reply, don't touch reply[1]
+        f.service = "SOCKS5"; f.details = "short greeting"; f.is_vpn_like = true;
     } else if (reply[0] == 0x04) {
         f.service = "SOCKS4"; f.is_vpn_like = true;
     } else {
@@ -1470,19 +1437,9 @@ static HttpsProbe https_probe(const string& ip, int port, const string& host_hdr
         return r;
     }
     r.tls_ok = true;
-    // Full Chrome-on-Win10 header set — matches http_get() for consistency
-    // across every outbound request the tool emits.
+    // bare req, see what the origin answers
     string req = "GET / HTTP/1.1\r\nHost: " + (host_hdr.empty()?string("example.com"):host_hdr) + "\r\n"
-                 "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\r\n"
-                 "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
-                 "image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7\r\n"
-                 "Accept-Language: en-US,en;q=0.9\r\n"
-                 "Accept-Encoding: gzip, deflate\r\n"
-                 "Sec-Fetch-Dest: document\r\n"
-                 "Sec-Fetch-Mode: navigate\r\n"
-                 "Sec-Fetch-Site: none\r\n"
-                 "Upgrade-Insecure-Requests: 1\r\n"
+                 "Accept: */*\r\n"
                  "Connection: close\r\n\r\n";
     SSL_write(ssl, req.data(), (int)req.size());
     // Collect up to ~4KB of response
@@ -4049,7 +4006,7 @@ static FullReport run_full_target(const string& target) {
         //   test issuance, LE staging, or a hand-crafted clone. When
         //   combined with fresh cert (<14d), this is a strong Xray / Trojan
         //   quickfire signal.
-        if (pf.ct && pf.ct->queried && !pf.ct->found && !pf.ct->err.empty() == false) {
+        if (pf.ct && pf.ct->queried && !pf.ct->found && pf.ct->err.empty()) {
             if (pf.tls && pf.tls->ok && pf.tls->age_days < 30) {
                 flag_major("cert on :" + std::to_string(pf.port) +
                            " is NOT in public CT logs AND is fresh (" +
@@ -5299,9 +5256,10 @@ int main(int argc, char** argv) {
         string a = argv[i];
         if (a == "--no-color") g_no_color = true;
         else if (a == "--verbose" || a == "-v") g_verbose = true;
-        else if (a == "--threads" && i+1<argc) g_threads = atoi(argv[++i]);
-        else if (a == "--tcp-to" && i+1<argc)  g_tcp_to  = atoi(argv[++i]);
-        else if (a == "--udp-to" && i+1<argc)  g_udp_to  = atoi(argv[++i]);
+        // clamp, negative wraps SO_TIMEO to like 49 days
+        else if (a == "--threads" && i+1<argc) g_threads = std::max(1, atoi(argv[++i]));
+        else if (a == "--tcp-to" && i+1<argc)  g_tcp_to  = std::max(1, atoi(argv[++i]));
+        else if (a == "--udp-to" && i+1<argc)  g_udp_to  = std::max(1, atoi(argv[++i]));
         else if (a == "--stealth") {
             g_stealth = true;
             g_no_geoip = true;
@@ -5345,15 +5303,15 @@ int main(int argc, char** argv) {
     } else {
         string cmd = pos[0];
         if (cmd == "scan" || cmd == "full") {
-            if (pos.size() < 2) { printf("need target\n"); return 2; }
+            if (pos.size() < 2) { printf("need target\n"); rc = 2; goto done; }
             run_full_target(pos[1]);
         } else if (cmd == "ports") {
-            if (pos.size() < 2) { printf("need target\n"); return 2; }
+            if (pos.size() < 2) { printf("need target\n"); rc = 2; goto done; }
             auto rs = resolve_host(pos[1]);
             auto op = scan_tcp(rs.primary_ip.empty()?pos[1]:rs.primary_ip, build_tcp_ports(), g_threads, g_tcp_to);
             for (auto& o: op) printf("  :%-5d  %lldms  %s\n", o.port, o.connect_ms, port_hint(o.port));
         } else if (cmd == "udp") {
-            if (pos.size() < 2) { printf("need target\n"); return 2; }
+            if (pos.size() < 2) { printf("need target\n"); rc = 2; goto done; }
             auto rs = resolve_host(pos[1]); string ip = rs.primary_ip.empty()?pos[1]:rs.primary_ip;
             auto show=[&](const char*n,int p,UdpResult u){
                 printf("  UDP:%-5d  %-22s  %s\n", p, n,
@@ -5368,12 +5326,12 @@ int main(int argc, char** argv) {
             show("WireGuard", 51820, wireguard_probe(ip,51820));
             show("Tailscale", 41641, wireguard_probe(ip,41641));
         } else if (cmd == "tls") {
-            if (pos.size() < 2) { printf("need target\n"); return 2; }
+            if (pos.size() < 2) { printf("need target\n"); rc = 2; goto done; }
             int port = pos.size() >= 3 ? atoi(pos[2].c_str()) : 443;
             auto rs = resolve_host(pos[1]);
             string ip = rs.primary_ip.empty()?pos[1]:rs.primary_ip;
             auto tp = tls_probe(ip, port, pos[1]);
-            if (!tp.ok) { printf("TLS fail: %s\n", tp.err.c_str()); return 1; }
+            if (!tp.ok) { printf("TLS fail: %s\n", tp.err.c_str()); rc = 1; goto done; }
             printf("  %s / %s / ALPN=%s / %s / %lldms\n",
                    tp.version.c_str(), tp.cipher.c_str(), tp.alpn.c_str(),
                    tp.group.c_str(), tp.handshake_ms);
@@ -5395,7 +5353,7 @@ int main(int argc, char** argv) {
             else
                 printf("  => cert varies per SNI (multi-tenant TLS, NOT Reality)\n");
         } else if (cmd == "j3") {
-            if (pos.size() < 2) { printf("need target\n"); return 2; }
+            if (pos.size() < 2) { printf("need target\n"); rc = 2; goto done; }
             int port = pos.size() >= 3 ? atoi(pos[2].c_str()) : 443;
             auto rs = resolve_host(pos[1]); string ip = rs.primary_ip.empty()?pos[1]:rs.primary_ip;
             auto probes = j3_probes(ip, port);
@@ -5423,7 +5381,7 @@ int main(int argc, char** argv) {
         } else if (cmd == "local" || cmd == "me" || cmd == "self") {
             run_local_analysis();
         } else if (cmd == "snitch") {
-            if (pos.size() < 2) { printf("need target\n"); return 2; }
+            if (pos.size() < 2) { printf("need target\n"); rc = 2; goto done; }
             int port = pos.size() >= 3 ? atoi(pos[2].c_str()) : 443;
             auto rs = resolve_host(pos[1]);
             string ip = rs.primary_ip.empty() ? pos[1] : rs.primary_ip;
@@ -5439,12 +5397,12 @@ int main(int argc, char** argv) {
             printf("  expected-min for %s = %.0fms\n", cc.c_str(), sn.expected_min_ms);
             printf("  => %s\n", sn.summary.c_str());
         } else if (cmd == "trace" || cmd == "traceroute") {
-            if (pos.size() < 2) { printf("need target\n"); return 2; }
+            if (pos.size() < 2) { printf("need target\n"); rc = 2; goto done; }
             auto rs = resolve_host(pos[1]);
             string ip = rs.primary_ip.empty() ? pos[1] : rs.primary_ip;
             int maxh = pos.size() >= 3 ? atoi(pos[2].c_str()) : 18;
             auto tr = trace_hops(ip, maxh);
-            if (!tr.ok) { printf("  no hops returned\n"); return 1; }
+            if (!tr.ok) { printf("  no hops returned\n"); rc = 1; goto done; }
             for (auto& h: tr.hops) {
                 if (h.rtt_ms < 0) printf("  %2d  *\n", h.ttl);
                 else              printf("  %2d  %-16s  %dms\n", h.ttl, h.addr.c_str(), h.rtt_ms);
@@ -5459,6 +5417,7 @@ int main(int argc, char** argv) {
             run_full_target(cmd);
         }
     }
+done:
     WSACleanup();
     return rc;
 }

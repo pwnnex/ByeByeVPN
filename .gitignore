@@ -1,6 +1,5 @@
 # Build artifacts
 build/
-build-*/
 cmake-build-*/
 out/
 *.o
@@ -10,6 +9,12 @@ out/
 *.so
 *.dylib
 *.def
+
+# build-win/ ships real static openssl archives for reproducible builds.
+# ignore everything else in there (stray .def files, test artifacts),
+# keep the two archives tracked.
+!build-win/libssl.a
+!build-win/libcrypto.a
 
 # Binaries (let releases carry these, don't commit to repo)
 byebyevpn

@@ -1,181 +1,173 @@
 # Build guide
 
-This document explains how to reproduce the release `byebyevpn.exe` from
-source, with verified OpenSSL provenance. The static OpenSSL archives
-(`libssl.a`, `libcrypto.a`) are **not shipped** in the repository — they
-are `.gitignore`d. You obtain them yourself from a trusted source, so
-the audit chain "does the repo ship a backdoored crypto blob?" has an
-answer: it doesn't ship one at all.
+This document explains how to reproduce `byebyevpn.exe` from source with
+verified OpenSSL provenance. The static OpenSSL archives
+(`libssl.a`, `libcrypto.a`) live in `build-win/` and are tracked in
+the repo so the build is self-contained. Their contents are
+bit-identical to what the msys2 `mingw-w64-ucrt-x86_64-openssl`
+package ships, and the SHA256 values below are reproducible from
+a fresh msys2 install or from the msys2 repository mirror directly.
 
-## v2.5 release build environment
+## Toolchain for the current release
 
-The official `byebyevpn-v2.5-win64.zip` exe was built with:
+| Component     | Version                                           | Source                                                 |
+|---------------|---------------------------------------------------|--------------------------------------------------------|
+| Compiler      | g++ 15.2.0 (MinGW-w64 UCRT posix-seh, WinLibs r7) | https://winlibs.com/                                   |
+| C++ standard  | `-std=c++20`                                      | compiler built-in                                      |
+| OpenSSL       | 3.6.2                                             | msys2 pkg `mingw-w64-ucrt-x86_64-openssl-3.6.2-2`      |
+| Host          | Windows 11 Pro 10.0.26200                         | -                                                      |
+| Target        | x86_64-w64-mingw32, `_WIN32_WINNT=0x0A00` (Win10+)| compile flag                                           |
 
-| Component       | Version                                                 | Source                                    |
-|-----------------|---------------------------------------------------------|-------------------------------------------|
-| Compiler        | g++ 15.2.0 (MinGW-w64 UCRT posix-seh, WinLibs r7)       | https://winlibs.com/                      |
-| C++ standard    | `-std=c++20`                                            | compiler built-in                         |
-| OpenSSL         | 3.6.1 (27 Jan 2026)                                     | msys2 package `mingw-w64-ucrt-x86_64-openssl-3.6.1-3` |
-| Host OS         | Windows 11 Pro 10.0.26200                               | —                                         |
-| Target          | x86_64-w64-mingw32, `_WIN32_WINNT=0x0A00` (Win10+)      | compile flag                              |
+## Static archive provenance
 
-Static libraries used (from `build-win/` at build time):
+The files shipped in `build-win/` are the exact static archives from
+the published msys2 package. No local modifications, no private
+builds.
+
+### msys2 package
 
 ```
-libssl.a     475 768 bytes   SHA256: 069b8c7c92872a5a4336aeea492a58d3be137afc69bd49d4cc4f153d347a65be
-libcrypto.a  4 607 000 bytes SHA256: 0aa09e4841847b6aee0d77449c576944b0fe08e9baa457cebb0d2560d7abe371
+pkg:     mingw-w64-ucrt-x86_64-openssl-3.6.2-2-any.pkg.tar.zst
+pkg-sha: 4b919cc9ed46b55c465a39204bf5034f2d8be931840c6a62ae71b1554bbea9a5
+size:    8,227,741 bytes
+mirror1: https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-openssl-3.6.2-2-any.pkg.tar.zst
+mirror2: https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-openssl-3.6.2-2-any.pkg.tar.zst
+mirror3: https://mirror.yandex.ru/mirrors/msys2/mingw/ucrt64/mingw-w64-ucrt-x86_64-openssl-3.6.2-2-any.pkg.tar.zst
 ```
 
-These are static archives built from OpenSSL 3.6.1 source. Any reader
-can rebuild from the same source and verify the byte contents.
+### Extracted archives (what's in `build-win/`)
 
-## How to reproduce the build yourself
+```
+build-win/libssl.a       1,664,942 bytes   sha256: bf7a501fbcd50db87187ff263c35a264be48dd5ce18278bdf350aa6ad2a6a038
+build-win/libcrypto.a    9,683,326 bytes   sha256: 23c62ffdef07d5ee2a4667eba45d713b56b5f57cbd0ae4b15dfd761500bd0046
+```
 
-### Option A — via msys2 (recommended)
-
-msys2 packages are signed and the package sources are mirrored. This is
-the cleanest audit path.
-
-1. Install msys2 from https://www.msys2.org/ (installer is signed and
-   has a published checksum on the download page).
-
-2. From an msys2 UCRT shell, install the toolchain and OpenSSL:
-
-   ```bash
-   pacman -S --needed mingw-w64-ucrt-x86_64-gcc \
-                       mingw-w64-ucrt-x86_64-openssl \
-                       mingw-w64-ucrt-x86_64-make \
-                       git
-   ```
-
-3. Clone the repo and produce the static libs:
-
-   ```bash
-   git clone https://github.com/pwnnex/ByeByeVPN.git
-   cd ByeByeVPN
-   mkdir -p build-win
-   # Copy the msys2-installed static archives into build-win/:
-   cp /ucrt64/lib/libssl.a      build-win/libssl.a
-   cp /ucrt64/lib/libcrypto.a   build-win/libcrypto.a
-   ```
-
-4. Build:
-
-   ```bash
-   git checkout v2.5
-   make windows-static
-   sha256sum byebyevpn.exe
-   ```
-
-   Note: byte-for-byte reproducibility is **not** guaranteed across
-   different msys2 installations (PE timestamp, build IDs, compiler
-   revision will vary). A sha256 that matches the release is a lucky
-   bonus, not an expected outcome. What's guaranteed reproducible is
-   the **functional** behaviour — same source + same OpenSSL version =
-   semantically identical binary.
-
-### Option B — build OpenSSL from source
-
-If you don't trust msys2's packaging either, build OpenSSL yourself:
+### Verify yourself
 
 ```bash
-# Download OpenSSL 3.6.1 source from openssl.org (signed tarball)
-wget https://www.openssl.org/source/openssl-3.6.1.tar.gz
-wget https://www.openssl.org/source/openssl-3.6.1.tar.gz.sha256
-
-# Verify the tarball matches the published SHA256
-sha256sum -c openssl-3.6.1.tar.gz.sha256
-
-tar xzf openssl-3.6.1.tar.gz
-cd openssl-3.6.1
-./Configure mingw64 no-shared no-dso \
-            --prefix=$PWD/install \
-            --cross-compile-prefix=x86_64-w64-mingw32-
-make -j$(nproc)
-make install_sw
-
-# Copy libs to byebyevpn build-win/
-cp install/lib64/libssl.a     ../ByeByeVPN/build-win/libssl.a
-cp install/lib64/libcrypto.a  ../ByeByeVPN/build-win/libcrypto.a
-
-cd ../ByeByeVPN
-make windows-static
+# from a clean msys2 ucrt64 shell
+pacman -S --needed mingw-w64-ucrt-x86_64-openssl
+sha256sum /ucrt64/lib/libssl.a /ucrt64/lib/libcrypto.a
+# should match the values above
 ```
 
-### Option C — Linux cross-compile (no Windows host needed)
+Or fetch the package directly and extract:
+
+```bash
+curl -LO https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-openssl-3.6.2-2-any.pkg.tar.zst
+sha256sum mingw-w64-ucrt-x86_64-openssl-3.6.2-2-any.pkg.tar.zst
+# 4b919cc9ed46b55c465a39204bf5034f2d8be931840c6a62ae71b1554bbea9a5
+tar -xf mingw-w64-ucrt-x86_64-openssl-3.6.2-2-any.pkg.tar.zst
+sha256sum ucrt64/lib/libssl.a ucrt64/lib/libcrypto.a
+```
+
+If any of these three SHA256 values don't match, the archive was
+tampered with. Do not link against it.
+
+## Reproduce the build
+
+### Option A - msys2 (native)
+
+```bash
+pacman -S --needed mingw-w64-ucrt-x86_64-gcc \
+                    mingw-w64-ucrt-x86_64-openssl \
+                    mingw-w64-ucrt-x86_64-make \
+                    git
+
+git clone https://github.com/pwnnex/ByeByeVPN.git && cd ByeByeVPN
+make windows-static
+sha256sum byebyevpn.exe
+```
+
+The `windows-static` target links against the `build-win/*.a` archives
+already in the tree, so the output only depends on the compiler
+toolchain. The exe is ~8.5 MB.
+
+### Option B - Linux cross-compile
 
 ```bash
 # Debian/Ubuntu
-sudo apt install -y mingw-w64 wine64
+sudo apt install -y mingw-w64
 
-# Build static OpenSSL under mingw-w64 per Option B above, OR install
-# a distro-packaged static OpenSSL for mingw if available:
-#   Arch:   mingw-w64-openssl
-#   Fedora: mingw64-openssl-static
+# Arch
+sudo pacman -S mingw-w64-gcc
 
+# then:
 x86_64-w64-mingw32-g++ -O2 -std=c++20 -D_WIN32_WINNT=0x0A00 \
-    -static -static-libgcc -static-libstdc++ \
+    -static \
     src/byebyevpn.cpp -o byebyevpn.exe \
     build-win/libssl.a build-win/libcrypto.a \
     -lws2_32 -liphlpapi -lwinhttp -lcrypt32 -lbcrypt -ldnsapi -luser32 -ladvapi32
 
-wine byebyevpn.exe help    # smoke test
+wine byebyevpn.exe help
 ```
 
-## Why static linking?
+### Option C - build OpenSSL from source yourself
 
-The release exe statically links OpenSSL so end-users don't have to
-juggle two DLLs (`libssl-3-x64.dll`, `libcrypto-3-x64.dll`) that often
-collide with unrelated OpenSSL installations on the user's `PATH`.
+If you don't trust msys2 at all, build OpenSSL 3.6.2 from upstream
+signed tarball:
 
-Trade-offs of this choice:
+```bash
+wget https://www.openssl.org/source/openssl-3.6.2.tar.gz
+wget https://www.openssl.org/source/openssl-3.6.2.tar.gz.sha256
+sha256sum -c openssl-3.6.2.tar.gz.sha256
 
-| Aspect                | Static (what we ship)                       | Dynamic (alternative)           |
-|-----------------------|---------------------------------------------|---------------------------------|
-| User experience       | 1 file, no DLL hell                         | 3 files, DLL version conflicts  |
-| CVE patching          | needs new binary on every OpenSSL CVE       | user updates DLLs independently |
-| Audit surface         | OpenSSL source + build procedure documented | same + DLL trust chain          |
-| Distribution size     | ≈1.1 MB exe                                 | ≈200 KB exe + ≈5 MB DLLs        |
+tar xzf openssl-3.6.2.tar.gz && cd openssl-3.6.2
+./Configure mingw64 no-shared no-dso \
+            --prefix=$PWD/install \
+            --cross-compile-prefix=x86_64-w64-mingw32-
+make -j$(nproc) && make install_sw
 
-The dynamic-build target exists too (`make windows`) if a packager
-prefers DLL distribution.
+# replace the archives in the repo
+cp install/lib64/libssl.a     ../ByeByeVPN/build-win/libssl.a
+cp install/lib64/libcrypto.a  ../ByeByeVPN/build-win/libcrypto.a
 
-## Reproducibility caveats
-
-The tool build is **not** byte-reproducible across different
-environments — PE timestamps, linker build IDs, and compiler revisions
-differ even when the source and OpenSSL version match. If you need
-byte-for-byte reproducibility for supply-chain attestation, the path
-is:
-
-1. Use an exact, pinned build container (TODO: ship `Dockerfile.build`
-   in a future release).
-2. Use `objcopy --remove-section=.buildid` to strip the linker build ID
-   after link.
-3. Strip PE timestamps with `objcopy --set-section-flags` or a
-   post-link helper.
-
-Pull requests to wire this up are welcome.
-
-## Release artifact verification
-
-```
-byebyevpn-v2.5-win64.zip   a74e1c41ae69f9048ae53e317119ff3b7b4f729181305c95e02dc826598180f9
-byebyevpn.exe              d608cc75801644e84906c4d314b320fe08ae46a83d0a64c7b8e8a7c4a7f1ad3d
+cd ../ByeByeVPN && make windows-static
 ```
 
-Verify with:
+The resulting archive SHA256s won't match the msys2 values (different
+compile flags, different build date), but functional behaviour is the
+same.
+
+## Release binary verification
+
+Every release tag ships SHA256 sums in the release notes. Verify:
 
 ```powershell
-# Windows
-Get-FileHash byebyevpn-v2.5-win64.zip -Algorithm SHA256
+Get-FileHash byebyevpn-v2.5.4-win64.zip -Algorithm SHA256
 ```
 
 ```bash
-# Linux / macOS
-sha256sum byebyevpn-v2.5-win64.zip
+sha256sum byebyevpn-v2.5.4-win64.zip
 ```
 
-If your hash matches, the zip you received is byte-identical to what
-was uploaded. A different hash means a middlebox / CDN altered the
-file — do not use it.
+A mismatch means the file was altered in transit (CDN / middlebox /
+your download tool). Do not run it.
+
+## Why static linking
+
+Static OpenSSL means one self-contained exe with no DLL dependencies
+outside Windows itself.
+
+| Aspect            | Static (shipped)                            | Dynamic                         |
+|-------------------|---------------------------------------------|---------------------------------|
+| User experience   | 1 file, no DLL hell                         | 3 files, DLL version conflicts  |
+| CVE patching      | rebuild required on each OpenSSL CVE        | user updates DLLs independently |
+| Distribution size | ~8.5 MB exe                                 | ~300 KB exe + ~5 MB DLLs        |
+
+A dynamic build target exists for packagers who prefer DLL shipping
+(`make windows`).
+
+## Reproducibility caveats
+
+The build is **not** byte-identical across environments - PE
+timestamps, linker build-id, and compiler revisions all differ. If
+you need bit-for-bit reproducibility for supply-chain attestation,
+use the GitHub Actions workflow (`.github/workflows/release.yml`) -
+it builds in a pinned container image and all release zips are
+produced there. The CI workflow logs print the SHA256 of the output
+exe so anyone can cross-check against a tag's release zip.
+
+Stripping PE timestamps + linker build-ids for full byte-repro is on
+the roadmap (requires `objcopy --remove-section=.buildid` + a
+post-link timestamp patcher).

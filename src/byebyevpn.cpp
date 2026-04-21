@@ -35,6 +35,7 @@
 #include <windows.h>
 #include <tlhelp32.h>
 #include <winhttp.h>
+#include <conio.h>
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -204,6 +205,58 @@ static string json_get_str(const string& body, const string& key) {
 }
 
 // ============================================================================
+// TSPU-specific helpers (see DanielLavrushin/tspu-docs for the methodology)
+// ============================================================================
+
+// tspu management subnets use 10.<region>.<site>.Z layout:
+//   .131-.140 balancers, .141-.150 bmc, .151-.190 filters,
+//   .191-.230 ipmi, .231-.235 spfs, .241-.245 spxd, .254 kontinent gw.
+// if a private hop seen in traceroute falls in these ranges - likely tspu.
+static bool looks_like_tspu_hop(const string& addr) {
+    if (addr.size() < 8 || addr.size() > 15) return false;
+    if (addr.compare(0, 3, "10.") != 0) return false;
+    unsigned a = 0, b = 0, c = 0;
+    if (sscanf(addr.c_str(), "10.%u.%u.%u", &a, &b, &c) != 3) return false;
+    if (a > 255 || b > 255 || c > 255) return false;
+    // last-octet ranges from tspu-docs ch. 10
+    if (c >= 131 && c <= 235) return true;
+    if (c >= 241 && c <= 245) return true;
+    if (c == 254) return true;
+    return false;
+}
+
+// known tspu-operator block/warning redirect destinations (http 302 Location).
+// source: public observations + tspu-docs ch. 5.1.5
+// all entries hardcoded, never modified at runtime.
+static const char* TSPU_REDIRECT_MARKERS[] = {
+    "rkn.gov.ru",
+    "warning.rt.ru",
+    "nt.rtk.ru",
+    "blocked.rt.ru",
+    "blocked.ruvds.com",
+    "blocked.tattelecom.ru",
+    "blocked.yota.ru",
+    "zapret.gov.ru",
+    "eais.rkn.gov.ru",
+    "185.76.180.75",      // rostelecom warning page
+    "185.76.180.76",
+    "185.76.180.77",
+    nullptr
+};
+
+// compare a Location: value (up to 512 chars) against the blacklist.
+// case-insensitive substring match. caller must ensure location is bounded.
+static const char* looks_like_tspu_redirect(const string& location) {
+    if (location.empty() || location.size() > 512) return nullptr;
+    string ll = location;
+    for (auto& ch: ll) ch = (char)std::tolower((unsigned char)ch);
+    for (const char** p = TSPU_REDIRECT_MARKERS; *p; ++p) {
+        if (ll.find(*p) != string::npos) return *p;
+    }
+    return nullptr;
+}
+
+// ============================================================================
 // DNS resolve (returns all IPs)
 // ============================================================================
 struct Resolved {
@@ -289,9 +342,12 @@ static SOCKET tcp_connect(const string& host, int port, int timeout_ms, string& 
     for (auto* p = ai; p; p = p->ai_next) if (p->ai_family == AF_INET)  ordered.push_back(p);
     for (auto* p = ai; p; p = p->ai_next) if (p->ai_family == AF_INET6) ordered.push_back(p);
     SOCKET s = INVALID_SOCKET;
+    // remember the most informative failure across all ai iterations.
+    // priority: refused > timeout > other.
+    bool saw_timeout = false, saw_refused = false, saw_other = false;
     for (auto* p: ordered) {
         s = socket(p->ai_family, SOCK_STREAM, IPPROTO_TCP);
-        if (s == INVALID_SOCKET) continue;
+        if (s == INVALID_SOCKET) { saw_other = true; continue; }
         u_long nb = 1; ioctlsocket(s, FIONBIO, &nb);
         int rc = connect(s, p->ai_addr, (int)p->ai_addrlen);
         if (rc == 0) { u_long bl=0; ioctlsocket(s,FIONBIO,&bl); break; }
@@ -303,12 +359,26 @@ static SOCKET tcp_connect(const string& host, int port, int timeout_ms, string& 
                 int se = 0; int sl = sizeof(se);
                 getsockopt(s, SOL_SOCKET, SO_ERROR, (char*)&se, &sl);
                 if (se == 0) { u_long bl=0; ioctlsocket(s,FIONBIO,&bl); break; }
+                if (se == WSAECONNREFUSED) saw_refused = true;
+                else saw_other = true;
+            } else if (sr == 0) {
+                saw_timeout = true;  // select ran out with no event
+            } else {
+                saw_other = true;
             }
+        } else {
+            int le = WSAGetLastError();
+            if (le == WSAECONNREFUSED) saw_refused = true;
+            else saw_other = true;
         }
         closesocket(s); s = INVALID_SOCKET;
     }
     freeaddrinfo(ai);
-    if (s == INVALID_SOCKET) err = "connect";
+    if (s == INVALID_SOCKET) {
+        if (saw_refused)      err = "refused";
+        else if (saw_timeout) err = "timeout";
+        else                  err = "other";
+    }
     return s;
 }
 
@@ -805,13 +875,14 @@ struct TcpOpen {
     int port;
     long long connect_ms;
     string banner; // grabbed on connect, if any
+    string err;    // only set on failure: "timeout" / "refused" / "other" / "dns"
 };
 
 static TcpOpen probe_tcp(const string& host, int port, int to_ms) {
     TcpOpen o; o.port = port; o.connect_ms = -1;
     auto t0 = std::chrono::steady_clock::now();
     string err; SOCKET s = tcp_connect(host, port, to_ms, err);
-    if (s == INVALID_SOCKET) return o;
+    if (s == INVALID_SOCKET) { o.err = err; return o; }
     o.connect_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                      std::chrono::steady_clock::now() - t0).count();
     // passive banner grab (some servers talk first: SSH/FTP/SMTP)
@@ -827,18 +898,54 @@ static TcpOpen probe_tcp(const string& host, int port, int to_ms) {
     return o;
 }
 
-static vector<TcpOpen> scan_tcp(const string& host, const vector<int>& ports, int threads, int to_ms) {
+struct ScanStats {
+    size_t scanned  = 0;  // ports actually probed (may be < total if skipped)
+    size_t timeouts = 0;
+    size_t refused  = 0;
+    size_t other    = 0;
+    bool   skipped  = false;
+};
+
+static vector<TcpOpen> scan_tcp(const string& host, const vector<int>& ports,
+                                int threads, int to_ms, ScanStats* stats = nullptr) {
     vector<TcpOpen> open;
     std::mutex mx;
     std::atomic<size_t> idx{0};
     std::atomic<int>    done{0};
+    std::atomic<size_t> tmo{0}, refused{0}, other{0};
+    std::atomic<bool>   abort_scan{false};
+
+    // drain any pending keys from prior prompts so Enter doesn't skip
+    while (_kbhit()) _getch();
+    fprintf(stderr, "  (press 'q' to skip this phase)\n");
+
+    std::thread kb([&]{
+        while (!abort_scan.load()) {
+            if (_kbhit()) {
+                int c = _getch();
+                if (c == 'q' || c == 'Q' || c == 27) {
+                    abort_scan = true;
+                    break;
+                }
+            }
+            Sleep(50);
+        }
+    });
+
     auto worker = [&]{
         while (true) {
+            if (abort_scan.load()) break;
             size_t i = idx.fetch_add(1);
             if (i >= ports.size()) break;
             TcpOpen o = probe_tcp(host, ports[i], to_ms);
             int d = ++done;
             size_t cur = 0;
+            if (o.connect_ms < 0) {
+                // classify why it closed
+                if (o.err == "timeout")      ++tmo;
+                else if (o.err == "refused") ++refused;
+                else                         ++other;
+            }
             {
                 std::lock_guard<std::mutex> lk(mx);
                 if (o.connect_ms >= 0) open.push_back(std::move(o));
@@ -854,8 +961,27 @@ static vector<TcpOpen> scan_tcp(const string& host, const vector<int>& ports, in
     vector<std::thread> th;
     for (int i=0;i<threads;++i) th.emplace_back(worker);
     for (auto& t: th) t.join();
-    fprintf(stderr, "\r  scan done (%zu/%zu, open=%zu)        \n", ports.size(), ports.size(), open.size());
+
+    abort_scan = true;  // signal kb-thread to exit
+    kb.join();
+
+    size_t scanned = std::min(idx.load(), ports.size());
+    bool was_skipped = (scanned < ports.size());
+    if (was_skipped) {
+        fprintf(stderr, "\r  scan SKIPPED at %zu/%zu (open=%zu)        \n",
+                scanned, ports.size(), open.size());
+    } else {
+        fprintf(stderr, "\r  scan done (%zu/%zu, open=%zu)        \n",
+                ports.size(), ports.size(), open.size());
+    }
     std::sort(open.begin(), open.end(), [](auto&a,auto&b){return a.port<b.port;});
+    if (stats) {
+        stats->scanned  = scanned;
+        stats->timeouts = tmo.load();
+        stats->refused  = refused.load();
+        stats->other    = other.load();
+        stats->skipped  = was_skipped;
+    }
     return open;
 }
 
@@ -868,6 +994,9 @@ struct FpResult {
     string raw_hex;      // for debugging (optional)
     bool   is_vpn_like = false;
     bool   silent      = false; // didn't respond to probes
+    bool   tspu_redirect = false; // http 302 Location: matches tspu warning page
+    string redirect_target;       // the Location: value if tspu_redirect
+    string redirect_marker;       // which blacklist entry matched
 };
 
 static string printable_prefix(const string& s, size_t lim = 80) {
@@ -904,10 +1033,30 @@ static FpResult fp_http_plain(const string& host, int port) {
     f.service = "HTTP";
     f.details = trim(first);
     if (!server.empty()) f.details += "  | Server: " + server;
+    // parse Location: header for tspu-redirect detection
+    {
+        string loresp = tolower_s(resp);
+        size_t lp = loresp.find("\nlocation:");
+        if (lp != string::npos) {
+            size_t vs = lp + 10;
+            size_t ve = resp.find('\r', vs);
+            if (ve == string::npos) ve = resp.find('\n', vs);
+            if (ve != string::npos && ve > vs && ve - vs < 512) {
+                string location = trim(resp.substr(vs, ve - vs));
+                const char* marker = looks_like_tspu_redirect(location);
+                if (marker) {
+                    f.tspu_redirect   = true;
+                    f.redirect_target = location;
+                    f.redirect_marker = marker;
+                    f.details += string("  [!tspu-redirect to ") + marker + "]";
+                }
+            }
+        }
+    }
     // heuristics: does server leak nginx/caddy/trojan/xray fallback?
     string rl = tolower_s(server);
-    if (contains(rl, "caddy"))     f.details += "  %[caddy-fronted — common Xray/Reality fallback]";
-    else if (contains(rl, "nginx")) f.details += "  %[nginx — fallback host?]";
+    if (contains(rl, "caddy"))     f.details += "  %[caddy-fronted - common Xray/Reality fallback]";
+    else if (contains(rl, "nginx")) f.details += "  %[nginx - fallback host?]";
     else if (contains(rl, "cloudflare")) f.details += "  %[cloudflare]";
     return f;
 }
@@ -2780,6 +2929,7 @@ struct TraceResult {
     bool  reached_target = false; // last hop == target
     int   max_rtt_jump_ms = 0;    // biggest RTT delta between consecutive hops
     int   long_hops = 0;          // hops with RTT > 150ms
+    int   tspu_hops  = 0;         // private hops matching tspu mgmt-subnet layout
     vector<TraceHop> hops;
 };
 
@@ -2847,6 +2997,10 @@ static TraceResult trace_hops(const string& target_ip, int max_hops = 18) {
     IcmpCloseHandle(h);
     r.hop_count = 0;
     for (auto& hop: r.hops) if (hop.rtt_ms >= 0) ++r.hop_count;
+    // count hops matching tspu mgmt-subnet layout
+    for (auto& hop: r.hops) {
+        if (hop.rtt_ms >= 0 && looks_like_tspu_hop(hop.addr)) ++r.tspu_hops;
+    }
     r.ok = (r.hop_count > 0);
     return r;
 }
@@ -3085,6 +3239,9 @@ struct FullReport {
     optional<TraceResult>              trace;
     vector<std::pair<int,UdpResult>>   udp_extra;   // Hysteria2/TUIC/L2TP/AmneziaWG
     optional<FpResult>                 sstp;        // SSTP on :443 (TLS-wrapped)
+    // v2.5.5 — scan-phase stats + blackhole detector
+    ScanStats scan_stats;
+    bool      bgp_blackhole_likely = false;
     // verdict
     int    score = 0;
     string label;
@@ -3186,7 +3343,19 @@ static FullReport run_full_target(const string& target) {
            col(C::BOLD), col(C::RST),
            col(C::CYN), _mode_name, col(C::RST),
            _ports.size(), g_threads, g_tcp_to);
-    R.open_tcp = scan_tcp(R.dns.primary_ip, _ports, g_threads, g_tcp_to);
+    R.open_tcp = scan_tcp(R.dns.primary_ip, _ports, g_threads, g_tcp_to, &R.scan_stats);
+    // bgp-blackhole heuristic: tspu type B filters drop packets at L3 via
+    // bgp-pushed ip-lists. visible as "all ports timeout, zero RST". a normal
+    // firewalled host either sends RST on closed ports or at least some RST'ed
+    // ports. need >=1000 ports scanned to avoid false-positive on short ranges.
+    // ref: tspu-docs ch. 7.3.2
+    if (!R.scan_stats.skipped && R.scan_stats.scanned >= 1000 && R.open_tcp.empty()) {
+        size_t tmo = R.scan_stats.timeouts;
+        size_t rst = R.scan_stats.refused;
+        if (rst == 0 && tmo >= R.scan_stats.scanned * 99 / 100) {
+            R.bgp_blackhole_likely = true;
+        }
+    }
     // bogus-open detection: WARP/CGNAT/proxy often ACK every port with same latency
     bool warp_like = false;
     if (R.open_tcp.size() > 60) {
@@ -3201,6 +3370,15 @@ static FullReport run_full_target(const string& target) {
     }
     if (R.open_tcp.empty()) {
         printf("  %sno open TCP ports found%s\n", col(C::YEL), col(C::RST));
+        if (R.bgp_blackhole_likely) {
+            printf("  %s!! %zu/%zu ports TIMEOUT with 0 RST - looks like L3 blackhole "
+                   "(tspu type B / BGP-pushed IP-list, not a regular dead host)%s\n",
+                   col(C::RED), R.scan_stats.timeouts, R.scan_stats.scanned, col(C::RST));
+        } else if (R.scan_stats.scanned >= 100) {
+            printf("  %s  (breakdown: %zu timeout, %zu refused, %zu other)%s\n",
+                   col(C::DIM), R.scan_stats.timeouts, R.scan_stats.refused,
+                   R.scan_stats.other, col(C::RST));
+        }
     } else {
         for (auto& o: R.open_tcp) {
             const char* hint = port_hint(o.port);
@@ -4091,6 +4269,41 @@ static FullReport run_full_target(const string& target) {
                  "traceroute: " + std::to_string(tr.hop_count) +
                  " hops, max RTT step " + std::to_string(tr.max_rtt_jump_ms) +
                  "ms — path looks clean");
+        // v2.5.5 - tspu mgmt-subnet hops (ch. 10 of tspu-docs).
+        // 10.X.Y.Z with Z in [131..235, 241..245, 254] is the standard
+        // layout for tspu filter/balancer/ipmi/spfs ranges.
+        if (tr.tspu_hops > 0) {
+            flag_minor("traceroute goes through " + std::to_string(tr.tspu_hops) +
+                       " hop(s) matching the tspu management-subnet layout "
+                       "(10.X.Y.[131-235]/[241-245]/254) - indicates a tspu site "
+                       "is between you and the target",
+                       5 * tr.tspu_hops);
+        }
+    }
+
+    // ---- v2.5.5 BGP-blackhole (tspu type B) -------------------------------
+    // all ports timeout with zero RST = destination has been BGP-null-routed
+    // by operator (tspu-docs ch. 7.3.2). this is a hard block, not a dead server.
+    if (R.bgp_blackhole_likely) {
+        flag_major("L3 BGP-blackhole pattern on target: " +
+                   std::to_string(R.scan_stats.timeouts) + "/" +
+                   std::to_string(R.scan_stats.scanned) +
+                   " ports TIMEOUT with 0 RST - tspu type B / operator ip-list block",
+                   40);
+    }
+
+    // ---- v2.5.5 TSPU redirect page on HTTP ports --------------------------
+    // tspu type A redirects http/:80 to operator warning page via 302.
+    // ref: tspu-docs ch. 5.1.5
+    for (auto& pf: R.fps) {
+        if (pf.fp.tspu_redirect && !pf.fp.redirect_marker.empty()) {
+            flag_major("HTTP on :" + std::to_string(pf.port) +
+                       " redirects to operator warning page '" +
+                       pf.fp.redirect_marker + "' (Location: '" +
+                       printable_prefix(pf.fp.redirect_target, 60) +
+                       "') - tspu type A active block",
+                       30);
+        }
     }
 
     // ---- J3 active-probe roles -------------------------------------
@@ -4915,6 +5128,14 @@ static FullReport run_full_target(const string& target) {
         rules.push_back({"Shadowsocks default port",    shadowsocks_default, "TCP/8388 or TCP/8488 open"});
         bool socks_open = openset.count(1080) > 0 || openset.count(1081) > 0;
         rules.push_back({"Open SOCKS5 proxy",           socks_open,   "TCP/1080 SOCKS5 greeting accepted"});
+        // v2.5.5 - direct tspu-observable a-tier rules.
+        // keep these BEFORE b-tier starts; update A_end below if count changes.
+        bool tspu_redirect_a = false;
+        for (auto& pf: R.fps) if (pf.fp.tspu_redirect) { tspu_redirect_a = true; break; }
+        rules.push_back({"TSPU http redirect to warning", tspu_redirect_a,
+                         "HTTP 302 Location: matches operator block/warning page"});
+        rules.push_back({"BGP-blackhole (tspu type B)",    R.bgp_blackhole_likely,
+                         "all ports TIMEOUT with zero RST - operator ip-list block"});
 
         // B-tier (throttle / QoS / mark)
         bool reality_hit = any_reality;
@@ -4937,10 +5158,14 @@ static FullReport run_full_target(const string& target) {
         rules.push_back({"Multi-source VPN/proxy tag",  (vpn_hits >= 2 || proxy_hits >= 2),
                          "≥2 GeoIP providers tag the IP as VPN/proxy"});
         rules.push_back({"Tor exit relay",              (tor_hits >= 1), "At least 1 GeoIP provider tags the IP as Tor exit"});
+        // v2.5.5 - b-tier accumulating rule for tspu site-on-path
+        bool tspu_hops_hit = (R.trace && R.trace->ok && R.trace->tspu_hops > 0);
+        rules.push_back({"TSPU mgmt-subnet in traceroute", tspu_hops_hit,
+                         "hop(s) in 10.X.Y.[131-235]/[241-245]/254 range - tspu site on path"});
 
         // Print rule hit list
         int A_hits = 0, B_hits = 0;
-        const int A_end = 9; // first 9 rules = A-tier
+        const int A_end = 11; // first 11 rules = A-tier (9 protocol + 2 tspu direct)
         for (size_t i = 0; i < rules.size(); ++i) {
             if (!rules[i].hit) continue;
             if ((int)i < A_end) ++A_hits; else ++B_hits;

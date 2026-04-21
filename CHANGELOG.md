@@ -1,5 +1,51 @@
 # Changelog
 
+## v2.5.6 - 2026-04-21
+
+small feature drop on top of v2.5.5. inspired by DanielLavrushin/tspu-docs
+methodology (operator-level tspu documentation) and one user request.
+
+### q-skip for tcp scan phase (#6)
+
+during phase [3/8] (tcp port scan) press `q`/`Q`/`Esc` and the remaining
+ports are skipped, pipeline moves to the next phase. useful on `--full`
+1-65535 when you already see the relevant open ports are below some
+threshold. kb-poll thread via `_kbhit()` + `_getch()` (conio.h), atomic
+abort flag, pending-key drain so Enter from target prompt doesn't skip.
+progress line says `scan SKIPPED at N/TOTAL` when aborted.
+
+### bgp-blackhole detector (tspu type B)
+
+tspu type B blocks hosts not via DPI but via bgp-pushed ip-lists on
+the operator balancer (tspu-docs ch. 7.3.2). visible as "all ports
+timeout, zero RST" - a regular firewalled host either sends RST on
+closed ports or at least some RST'ed ports. `tcp_connect()` now
+distinguishes `timeout`/`refused`/`other` error reasons, `scan_tcp()`
+counts them, and the verdict engine raises tier A +40 when ≥99% of
+≥1000 scanned ports timed out with zero RST.
+
+### tspu mgmt-subnet hops in traceroute
+
+tspu sites use a stable `10.<region>.<site>.Z` layout where
+`Z ∈ [131..235, 241..245, 254]` for filters/balancers/ipmi/spfs
+(tspu-docs ch. 10). `trace_hops()` now counts private hops matching
+this layout and the verdict engine flags them as tier B (+5 per hop).
+
+### http redirect-page blacklist (tspu type A)
+
+tspu type A redirects HTTP/:80 via 302 to an operator warning page
+(`rkn.gov.ru`, `warning.rt.ru`, `blocked.rt.ru`, `185.76.180.75`,
+etc. - tspu-docs ch. 5.1.5). `fp_http_plain()` now parses the
+`Location:` header from the 2KB response, checks against a hardcoded
+blacklist, and the verdict engine flags matches as tier A (+30).
+
+### nothing else changed
+
+no build-system changes, no openssl bump, no header tweaks, no
+fingerprint-class changes.
+
+---
+
 ## v2.5.5 - 2026-04-21
 
 fixes on top of the ntc.party thread

@@ -15,7 +15,7 @@
 | |_) | |_| |  __/ |_) | |_| |  __/\ V / |  __/| |\  |
 |____/ \__, |\___|____/ \__, |\___| \_/  |_|   |_| \_|
        |___/            |___/
-   Full TSPU/DPI/VPN detectability scanner   v2.5.5
+   Full TSPU/DPI/VPN detectability scanner   v2.5.6
 ```
 
 **زبان‌ها / Languages:** [English](README.md) · [Русский](README.md#русский) · [简体中文](README.zh-CN.md) · [فارسی](#فارسی)
@@ -175,7 +175,7 @@ build را fail می‌کند.
 
 ### نصب
 
-Windows: `byebyevpn-v2.5.5-win64.zip` را از
+Windows: `byebyevpn-v2.5.6-win64.zip` را از
 [Releases](../../releases) دانلود کنید، باز کنید، `byebyevpn.exe`
 را اجرا کنید (دابل‌کلیک = منوی تعاملی، یا IP/نام میزبان از ترمینال).
 

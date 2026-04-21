@@ -56,7 +56,7 @@ static: $(SRC)
 # Output: byebyevpn-<VERSION>-win64.zip containing ONE runnable exe.
 # Override with:  make release-zip VERSION=v2.3
 # -----------------------------------------------------------------
-VERSION ?= v2.5.5
+VERSION ?= v2.5.6
 ZIP_NAME = $(BIN)-$(VERSION)-win64.zip
 
 release-zip: windows-static

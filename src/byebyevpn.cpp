@@ -124,7 +124,7 @@ static void banner() {
     puts("|____/ \\__, |\\___|____/ \\__, |\\___| \\_/  |_|   |_| \\_|");
     puts("       |___/            |___/                          ");
     printf("%s", col(C::RST));
-    printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.5.5%s\n\n",
+    printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.5.6%s\n\n",
            col(C::DIM), col(C::RST));
 }
 

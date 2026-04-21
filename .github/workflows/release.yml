@@ -24,47 +24,79 @@ jobs:
           update: false
           install: >-
             mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-openssl
             mingw-w64-ucrt-x86_64-make
             zip
             coreutils
+            diffutils
+            curl
+            tar
+            zstd
 
-      - name: verify shipped static archives match msys2 package
+      - name: verify shipped build-win archives match expected sha
         run: |
           set -eux
-          echo "=== shipped in repo ==="
-          sha256sum build-win/libssl.a build-win/libcrypto.a
-          echo "=== from installed msys2 pkg ==="
-          sha256sum /ucrt64/lib/libssl.a /ucrt64/lib/libcrypto.a
-          # must match byte-for-byte. if they don't, the repo copy was tampered.
-          diff -q build-win/libssl.a    /ucrt64/lib/libssl.a
-          diff -q build-win/libcrypto.a /ucrt64/lib/libcrypto.a
+          # these sha values come from the public msys2 pkg
+          # mingw-w64-ucrt-x86_64-openssl-3.6.2-2 (see BUILD.md).
+          # if the repo copy ever diverges, something was tampered with.
+          EXPECT_LIBSSL=bf7a501fbcd50db87187ff263c35a264be48dd5ce18278bdf350aa6ad2a6a038
+          EXPECT_LIBCRYPTO=23c62ffdef07d5ee2a4667eba45d713b56b5f57cbd0ae4b15dfd761500bd0046
+          ACT_LIBSSL=$(sha256sum build-win/libssl.a | cut -d' ' -f1)
+          ACT_LIBCRYPTO=$(sha256sum build-win/libcrypto.a | cut -d' ' -f1)
+          [ "$ACT_LIBSSL"    = "$EXPECT_LIBSSL"    ] || { echo "build-win/libssl.a sha mismatch, got $ACT_LIBSSL";    exit 1; }
+          [ "$ACT_LIBCRYPTO" = "$EXPECT_LIBCRYPTO" ] || { echo "build-win/libcrypto.a sha mismatch, got $ACT_LIBCRYPTO"; exit 1; }
+          echo "build-win archives match the sha in BUILD.md"
+
+      - name: cross-check against msys2 repo
+        run: |
+          set -eux
+          # pull the exact pinned pkg from repo.msys2.org and verify the
+          # shipped archives are byte-identical to what everyone else gets.
+          curl -fsSLo /tmp/openssl.pkg.tar.zst \
+            https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-openssl-3.6.2-2-any.pkg.tar.zst
+          EXPECT_PKG=4b919cc9ed46b55c465a39204bf5034f2d8be931840c6a62ae71b1554bbea9a5
+          ACT_PKG=$(sha256sum /tmp/openssl.pkg.tar.zst | cut -d' ' -f1)
+          [ "$ACT_PKG" = "$EXPECT_PKG" ] || { echo "pkg sha mismatch, got $ACT_PKG"; exit 1; }
+          mkdir -p /tmp/pkg
+          tar -xf /tmp/openssl.pkg.tar.zst -C /tmp/pkg
+          PKG_SSL=$(sha256sum /tmp/pkg/ucrt64/lib/libssl.a    | cut -d' ' -f1)
+          PKG_CRY=$(sha256sum /tmp/pkg/ucrt64/lib/libcrypto.a | cut -d' ' -f1)
+          REPO_SSL=$(sha256sum build-win/libssl.a    | cut -d' ' -f1)
+          REPO_CRY=$(sha256sum build-win/libcrypto.a | cut -d' ' -f1)
+          [ "$REPO_SSL" = "$PKG_SSL" ] || { echo "libssl.a differs from msys2 pkg"; exit 1; }
+          [ "$REPO_CRY" = "$PKG_CRY" ] || { echo "libcrypto.a differs from msys2 pkg"; exit 1; }
+          echo "build-win archives are bit-identical to msys2 pkg 3.6.2-2"
+          # swap the msys2-installed headers into /ucrt64 so the include path
+          # matches the library version we link against.
+          cp -r /tmp/pkg/ucrt64/include/openssl /ucrt64/include/
 
       - name: build static exe
         run: |
           set -eux
           make windows-static
-          file byebyevpn.exe
           ls -la byebyevpn.exe
 
-      - name: verify no fingerprint-class string on the wire path
-        run: |
-          set -eux
-          grep -nE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' src/byebyevpn.cpp || true
-          # the only acceptable matches are: file banner (L1), http_get
-          # comment about scrub rationale, and --help printf. any wire-path
-          # string would indicate a regression.
-
-      - name: check no extra dll deps
+      - name: check no mingw/openssl dll leaked into exe
         run: |
           set -eux
           objdump -p byebyevpn.exe | grep "DLL Name" || true
           if objdump -p byebyevpn.exe | grep -Eq "DLL Name: (libssl|libcrypto|libwinpthread|libgcc_|libstdc)"; then
-            echo "ERROR: dynamic dependency on mingw/openssl runtime leaked into the exe"
+            echo "dynamic dependency on mingw/openssl leaked into the exe"
             exit 1
           fi
 
-      - name: compute exe sha256
+      - name: verify no tool-identifying strings on wire paths
+        run: |
+          set -eux
+          # expected 3 non-wire matches: file banner comment, http_get scrub
+          # rationale comment, --help printf. any additional match is a regression.
+          N=$(grep -nE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' src/byebyevpn.cpp | wc -l)
+          if [ "$N" -gt 3 ]; then
+            echo "found $N tool-identifying matches (expected <= 3):"
+            grep -nE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' src/byebyevpn.cpp
+            exit 1
+          fi
+
+      - name: compute sha256
         id: hash
         run: |
           set -eux
@@ -91,21 +123,3 @@ jobs:
           path: |
             byebyevpn.exe
             ${{ steps.zipper.outputs.zip_name }}
-
-      - name: create release (tag builds only)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            byebyevpn.exe
-            ${{ steps.zipper.outputs.zip_name }}
-          body: |
-            reproducible build from commit ${{ github.sha }}
-
-            sha256:
-              byebyevpn.exe                           ${{ steps.hash.outputs.exe_sha }}
-              ${{ steps.zipper.outputs.zip_name }}    ${{ steps.zipper.outputs.zip_sha }}
-
-            static openssl provenance: see BUILD.md. msys2 pkg
-            `mingw-w64-ucrt-x86_64-openssl-3.6.2-2`, bit-identical to the
-            archives shipped in `build-win/`.

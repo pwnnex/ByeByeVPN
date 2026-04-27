@@ -49,10 +49,12 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <future>
 #include <iostream>
 #include <map>
@@ -86,6 +88,16 @@ static bool g_no_geoip   = false;  // skip all 9 3rd-party GeoIP services
 static bool g_no_ct      = false;  // skip crt.sh Certificate Transparency lookups
 static bool g_udp_jitter = false;  // add 50-300ms random delay between UDP probes
 
+// v2.5.7 - save scan output to a file (#7).
+// --save           writes <target>.md in the current directory
+// --save <path>    writes the explicit path (still wrapped as markdown)
+// Implementation: every printf/puts call is teed to stdout (with ANSI colors)
+// AND to g_save_fp (with ANSI escapes stripped). The file is wrapped in a
+// markdown code block so it renders cleanly in any md viewer.
+static bool   g_save_requested = false;
+static FILE*  g_save_fp        = nullptr;
+static string g_save_path;
+
 // port-scan mode
 enum class PortMode { FULL, FAST, RANGE, LIST };
 static PortMode    g_port_mode = PortMode::FULL;
@@ -107,6 +119,67 @@ namespace C {
 }
 static const char* col(const char* c) { return g_no_color ? "" : c; }
 
+// ----------------------------------------------------------------------------
+// Tee-output infrastructure (v2.5.7, --save flag, issue #7).
+// ----------------------------------------------------------------------------
+// Strip ANSI CSI / SGR sequences (ESC '[' ... letter) when writing to the
+// save file, so the .md is plain text without escape codes. We never emit
+// any other escape class (no OSC, no ESC ] etc.), so this is sufficient.
+static void save_write_stripped(const char* s, size_t n) {
+    if (!g_save_fp || !s || !n) return;
+    for (size_t i = 0; i < n; ) {
+        if (s[i] == '\x1b' && i + 1 < n && s[i+1] == '[') {
+            i += 2;
+            while (i < n && !(s[i] >= '@' && s[i] <= '~')) ++i;
+            if (i < n) ++i; // consume terminator letter
+        } else {
+            fputc((unsigned char)s[i], g_save_fp);
+            ++i;
+        }
+    }
+}
+
+// tee_printf: prints to stdout (ANSI preserved) AND to g_save_fp (ANSI stripped).
+static int tee_printf(const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vprintf(fmt, ap);
+    va_end(ap);
+    if (g_save_fp && fmt) {
+        char small[2048];
+        va_list ap2; va_start(ap2, fmt);
+        int needed = vsnprintf(small, sizeof(small), fmt, ap2);
+        va_end(ap2);
+        if (needed > 0 && needed < (int)sizeof(small)) {
+            save_write_stripped(small, (size_t)needed);
+        } else if (needed >= (int)sizeof(small)) {
+            std::vector<char> big((size_t)needed + 1);
+            va_list ap3; va_start(ap3, fmt);
+            vsnprintf(big.data(), big.size(), fmt, ap3);
+            va_end(ap3);
+            save_write_stripped(big.data(), (size_t)needed);
+        }
+    }
+    return n;
+}
+
+// tee_puts: same idea for puts (puts always appends a newline).
+// NOTE: must use fputs/fputc, not puts(), because the macro below would
+// otherwise turn the recursive call back into tee_puts -> infinite loop.
+static int tee_puts(const char* s) {
+    if (!s) return 0;
+    fputs(s, stdout);
+    fputc('\n', stdout);
+    if (g_save_fp) {
+        save_write_stripped(s, strlen(s));
+        fputc('\n', g_save_fp);
+    }
+    return 0;
+}
+
+#define printf tee_printf
+#define puts   tee_puts
+
 static void enable_vt() {
     HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD mode = 0;
@@ -124,7 +197,7 @@ static void banner() {
     puts("|____/ \\__, |\\___|____/ \\__, |\\___| \\_/  |_|   |_| \\_|");
     puts("       |___/            |___/                          ");
     printf("%s", col(C::RST));
-    printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.5.6%s\n\n",
+    printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.5.7%s\n\n",
            col(C::DIM), col(C::RST));
 }
 
@@ -5279,6 +5352,10 @@ static void help() {
     printf("  --no-geoip      skip all 9 3rd-party GeoIP/ASN lookups (target IP stays local)\n");
     printf("  --no-ct         skip crt.sh Certificate Transparency lookup (cert SHA stays local)\n");
     printf("  --udp-jitter    add 50-300ms random delay between UDP probes (smears port burst)\n\n");
+    printf("Save scan output to file (#7):\n");
+    printf("  --save           write the scan to '<target>.md' in the current directory\n");
+    printf("  --save <path>    write the scan to <path> (still wrapped as markdown)\n");
+    printf("                   ANSI colors are stripped from the file; terminal output is unchanged\n\n");
     printf("GeoIP sources (9 providers, 3 EU / 3 RU / 3 global):\n");
     printf("  EU:     ipapi.is, iplocate.io, freeipapi.com\n");
     printf("  RU:     2ip.io/2ip.me, ip-api.com/ru, sypexgeo.net\n");
@@ -5494,6 +5571,20 @@ int main(int argc, char** argv) {
         else if (a == "--no-geoip")  g_no_geoip = true;
         else if (a == "--no-ct")     g_no_ct = true;
         else if (a == "--udp-jitter") g_udp_jitter = true;
+        else if (a == "--save") {
+            // --save           -> auto-derive <target>.md  (path stays empty here)
+            // --save <path>    -> explicit path; only consumed if next arg is
+            //                     not another flag (so '--save --no-color' still
+            //                     triggers auto-naming with --no-color preserved)
+            g_save_requested = true;
+            if (i + 1 < argc) {
+                string nxt = argv[i + 1];
+                if (!nxt.empty() && nxt[0] != '-') {
+                    g_save_path = nxt;
+                    ++i;
+                }
+            }
+        }
         else if (a == "--full")  g_port_mode = PortMode::FULL;
         else if (a == "--fast")  g_port_mode = PortMode::FAST;
         else if (a == "--range" && i+1<argc) {
@@ -5519,6 +5610,60 @@ int main(int argc, char** argv) {
         }
         else if (a == "--help" || a == "-h" || a == "/?") { help(); return 0; }
         else pos.push_back(a);
+    }
+
+    // --save: open the output file BEFORE banner() so the banner is captured
+    // too. Auto-derive <target>.md if no path was given. Skip if there's no
+    // target on the cli (interactive mode has no single target).
+    if (g_save_requested) {
+        string path = g_save_path;
+        if (path.empty()) {
+            string target;
+            if (!pos.empty()) {
+                static const set<string> cmds = {
+                    "scan","full","ports","udp","tls","j3","geoip",
+                    "snitch","trace","traceroute","local","me","self","help"
+                };
+                if (pos.size() >= 2 && cmds.count(pos[0])) target = pos[1];
+                else                                       target = pos[0];
+            }
+            if (target.empty() || target == "local" || target == "me" || target == "self")
+                path = "byebyevpn-scan.md";
+            else {
+                // sanitize filename: replace path / wildcard chars
+                string safe;
+                for (char c: target) {
+                    if (c==':'||c=='/'||c=='\\'||c=='*'||c=='?'||c=='"'||
+                        c=='<'||c=='>'||c=='|') safe += '_';
+                    else                        safe += c;
+                }
+                path = safe + ".md";
+            }
+        }
+        g_save_fp = fopen(path.c_str(), "w");
+        if (!g_save_fp) {
+            fprintf(stderr, "warn: --save: cannot open '%s' for writing (%s); continuing without save\n",
+                    path.c_str(), strerror(errno));
+        } else {
+            g_save_path = path;
+            // Note: the scan body itself starts with the ascii banner,
+            // which already identifies the tool. We deliberately keep this
+            // file header brand-free so the public-audit grep over this
+            // source (see README "Audit" section) stays at the existing
+            // 2 matches (file banner comment + --help printf), neither of
+            // which can leak through the save-file path either.
+            time_t now = time(nullptr);
+            struct tm* lt = localtime(&now);
+            fprintf(g_save_fp, "# Scan report\n\n");
+            if (lt) fprintf(g_save_fp,
+                            "**Date:** %04d-%02d-%02d %02d:%02d:%02d  \n",
+                            1900 + lt->tm_year, 1 + lt->tm_mon, lt->tm_mday,
+                            lt->tm_hour, lt->tm_min, lt->tm_sec);
+            if (!pos.empty())
+                fprintf(g_save_fp, "**Target:** `%s`  \n", pos.back().c_str());
+            fprintf(g_save_fp, "**Scanner version:** v2.5.7  \n\n");
+            fprintf(g_save_fp, "```\n");
+        }
     }
 
     banner();
@@ -5643,6 +5788,12 @@ int main(int argc, char** argv) {
         }
     }
 done:
+    if (g_save_fp) {
+        fprintf(g_save_fp, "```\n");
+        fclose(g_save_fp);
+        g_save_fp = nullptr;
+        fprintf(stderr, "saved to %s\n", g_save_path.c_str());
+    }
     WSACleanup();
     return rc;
 }

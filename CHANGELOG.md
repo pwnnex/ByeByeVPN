@@ -1,5 +1,57 @@
 # Changelog
 
+## v2.5.7 - 2026-04-27
+
+small feature drop on top of v2.5.6. one user-requested feature, no
+fingerprint-class changes.
+
+### --save scan output to file (#7)
+
+new flag for keeping a copy of the scan output:
+
+```
+byebyevpn --save example.com         # writes example.com.md
+byebyevpn --save scan.md example.com # writes scan.md (explicit path)
+```
+
+implementation: tee-style. every `printf`/`puts` call goes both to stdout
+(with ansi colors as before) AND to the save file (with ansi escapes
+stripped). `printf` and `puts` are macro-redirected to `tee_printf` /
+`tee_puts` wrappers; the wrappers `vprintf` to stdout first, then
+`vsnprintf` into a temp buffer, then write a stripped copy to
+`g_save_fp`. terminal output is byte-identical to the no-save case.
+
+ansi-strip handles only csi sequences (`esc [ ... <letter>`) since that's
+the only escape class the tool emits (sgr color/reset). nothing else is
+filtered out.
+
+filename rules:
+- `--save` with no argument -> `<target>.md` in the cwd
+- `--save <path>` -> explicit path (must not start with `-`, otherwise
+  treated as the next flag)
+- target sanitization: `:` `/` `\` `*` `?` `"` `<` `>` `|` -> `_`
+- `--save` for `local` / interactive mode without a target -> falls back
+  to `byebyevpn-scan.md`
+
+file format: markdown header (`# ByeByeVPN scan` + date + target +
+scanner version) followed by a fenced code block wrapping the scan body.
+renders cleanly in github / vscode / any md viewer.
+
+### nothing else changed
+
+no protocol changes, no scoring changes, no header tweaks, no openssl
+bump, no on-the-wire fingerprint changes.
+
+the save-file md header is deliberately brand-free (`# Scan report` /
+`**Scanner version:** vX.Y.Z`) so the public audit grep stays at the
+same count as v2.5.6 — `grep -nE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex'
+src/byebyevpn.cpp` matches the file banner + the --help printf and
+nothing else. wire-side payloads (http headers, tls clienthello, udp
+probes, dns / openvpn / wg / quic / hysteria / l2tp / amneziawg /
+icmp / shadowsocks / j3 random) all stay scrub-clean.
+
+---
+
 ## v2.5.6 - 2026-04-21
 
 small feature drop on top of v2.5.5. inspired by DanielLavrushin/tspu-docs

@@ -20,6 +20,10 @@
 [ntc.party/t/byebyevpn/24325](https://ntc.party/t/byebyevpn/24325) ·
 [GitHub Issues](https://github.com/pwnnex/ByeByeVPN/issues)
 
+<a href="https://nowpayments.io/donation?api_key=4678bece-0dec-4ac0-8807-6e1373d4c2b8" target="_blank" rel="noreferrer noopener">
+    <img src="https://nowpayments.io/images/embeds/donation-button-black.svg" alt="Crypto donation button by NOWPayments">
+</a>
+
 ---
 
 ## English

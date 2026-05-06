@@ -1,31 +1,40 @@
-cmake_minimum_required(VERSION 3.15)
-project(byebyevpn CXX)
+cmake_minimum_required(VERSION 3.10)
+project(ByeByeVPN)
 
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
-endif()
-
-if(MSVC)
-    add_compile_options(/W3 /O2 /utf-8)
-    add_definitions(-D_CRT_SECURE_NO_WARNINGS -DNOMINMAX -DWIN32_LEAN_AND_MEAN)
-else()
-    add_compile_options(-O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function)
-endif()
-
+# Find OpenSSL
 find_package(OpenSSL REQUIRED)
 
-add_executable(byebyevpn src/byebyevpn.cpp)
+# Collect source files
+file(GLOB_RECURSE SRC_FILES
+    "core/*.cpp"
+    "network/*.cpp"
+    "analysis/*.cpp"
+    "cli/*.cpp"
+    "main.cpp"
+)
+
+add_executable(byebyevpn ${SRC_FILES})
+
+# Include directories
+target_include_directories(byebyevpn PRIVATE ${OPENSSL_INCLUDE_DIR})
+
+# Link OpenSSL
 target_link_libraries(byebyevpn PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
+# Platform specific libraries
 if(WIN32)
-    target_link_libraries(byebyevpn PRIVATE ws2_32 iphlpapi winhttp crypt32 bcrypt dnsapi)
-    target_compile_definitions(byebyevpn PRIVATE _WIN32_WINNT=0x0A00)
+    target_link_libraries(byebyevpn PRIVATE ws2_32 iphlpapi)
+    
+    if(MSVC)
+        # MSVC specific flags if needed
+        add_compile_options(/W3)
+    elseif(MINGW)
+        # MinGW specific flags if needed
+        add_compile_options(-Wall -Wextra)
+    endif()
 else()
-    find_package(Threads REQUIRED)
-    target_link_libraries(byebyevpn PRIVATE Threads::Threads)
+    target_link_libraries(byebyevpn PRIVATE pthread)
 endif()
-
-install(TARGETS byebyevpn RUNTIME DESTINATION bin)

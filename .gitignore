@@ -1,47 +1,56 @@
-# Build artifacts
-build/
-cmake-build-*/
-out/
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
 *.o
 *.obj
-*.a
-*.lib
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
 *.so
 *.dylib
-*.def
+*.dll
 
-# build-win/ ships real static openssl archives for reproducible builds.
-# ignore everything else in there (stray .def files, test artifacts),
-# keep the two archives tracked.
-!build-win/libssl.a
-!build-win/libcrypto.a
+# Fortran module files
+*.mod
+*.smod
 
-# Binaries (let releases carry these, don't commit to repo)
-byebyevpn
-byebyevpn.exe
-byebyevpn-static
-dist/byebyevpn
-dist/byebyevpn.exe
-dist/*.dll
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
 
 # CMake
 CMakeCache.txt
-CMakeFiles/
+CMakeFiles
+CMakeScripts
+Testing
+Makefile
 cmake_install.cmake
-Makefile.cmake
+install_manifest.txt
 compile_commands.json
+CTestTestfile.cmake
+_deps
 
-# IDE
+# Build directories
+build/
+bin/
+out/
+
+# IDE / OS
 .vscode/
 .idea/
 *.swp
-*~
+*.swo
 .DS_Store
-Thumbs.db
-
-# OpenSSL vendor
-*.pdb
-*.ilk
-*.exp
-*.zip
-dist/

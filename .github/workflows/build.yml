@@ -5,7 +5,7 @@ on:
     branches:
       - '**'
     tags:
-      - '**'
+      - 'v*'
   pull_request:
     branches:
       - '**'
@@ -58,3 +58,49 @@ jobs:
       - name: Build (Windows)
         if: runner.os == 'Windows'
         run: cmake --build build --config ${{ steps.build_type.outputs.type }}
+
+      - name: Prepare Artifacts (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir staging
+          cp build/byebyevpn staging/
+
+      - name: Prepare Artifacts (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir staging
+          copy build\${{ steps.build_type.outputs.type }}\byebyevpn.exe staging\
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: byebyevpn-${{ matrix.os }}
+          path: staging/*
+          retention-days: 1
+
+  release:
+    name: Publish Release
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download Linux Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: byebyevpn-ubuntu-latest
+          path: out/linux
+
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: byebyevpn-windows-latest
+          path: out/windows
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/linux/byebyevpn
+            out/windows/byebyevpn.exe

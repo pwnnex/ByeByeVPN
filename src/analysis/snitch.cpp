@@ -140,10 +140,10 @@ SnitchResult snitch_check(const std::string& target_ip, int target_port, const s
     r.min_ms = samples_v.front();
     r.max_ms = samples_v.back();
     for (auto v: samples_v) sum += v;
-    double mean = sum / samples_v.size();
+    double mean = sum / static_cast<double>(samples_v.size());
     double var  = 0;
     for (auto v: samples_v) var += (v - mean) * (v - mean);
-    var /= samples_v.size();
+    var /= static_cast<double>(samples_v.size());
     r.stddev_ms = std::sqrt(var);
     r.median_ms = percentile(samples_v, 0.5);
 

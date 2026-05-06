@@ -22,6 +22,7 @@ target_link_libraries(byebyevpn PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
 if(WIN32)
     target_link_libraries(byebyevpn PRIVATE ws2_32 iphlpapi)
+    add_compile_definitions(NOMINMAX _CRT_SECURE_NO_WARNINGS)
 
     if(MSVC)
         add_compile_options(/W3)

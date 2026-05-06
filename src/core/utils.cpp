@@ -64,18 +64,18 @@ int tee_printf(const char* fmt, ...) {
     int n = vprintf(fmt, ap);
     va_end(ap);
     if (g_save_fp && fmt) {
-        char small[2048];
+        char buf_small[2048];
         va_list ap2; va_start(ap2, fmt);
-        int needed = vsnprintf(small, sizeof(small), fmt, ap2);
+        int needed = vsnprintf(buf_small, sizeof(buf_small), fmt, ap2);
         va_end(ap2);
-        if (needed > 0 && needed < (int)sizeof(small)) {
-            save_write_stripped(small, (size_t)needed);
-        } else if (needed >= (int)sizeof(small)) {
-            std::vector<char> big((size_t)needed + 1);
+        if (needed > 0 && needed < (int)sizeof(buf_small)) {
+            save_write_stripped(buf_small, (size_t)needed);
+        } else if (needed >= (int)sizeof(buf_small)) {
+            std::vector<char> buf_big((size_t)needed + 1);
             va_list ap3; va_start(ap3, fmt);
-            vsnprintf(big.data(), big.size(), fmt, ap3);
+            vsnprintf(buf_big.data(), buf_big.size(), fmt, ap3);
             va_end(ap3);
-            save_write_stripped(big.data(), (size_t)needed);
+            save_write_stripped(buf_big.data(), (size_t)needed);
         }
     }
     return n;

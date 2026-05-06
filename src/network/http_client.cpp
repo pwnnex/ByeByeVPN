@@ -124,7 +124,7 @@ HttpResp http_get(const std::string& url, int timeout_ms) {
         r.err = "no header";
     }
 
-    r.ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-             std::chrono::steady_clock::now() - t0).count();
+    r.ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now() - t0).count());
     return r;
 }

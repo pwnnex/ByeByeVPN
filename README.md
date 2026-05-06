@@ -64,4 +64,5 @@ byebyevpn local                  # scan this machine
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+GPLv3. See [LICENSE](LICENSE) for the full license.
+This project is a fork of ByeByeVPN and contains code originally licensed under the MIT License by `pwnnex`. See [NOTICE](NOTICE) for the original copyright and permission notices.

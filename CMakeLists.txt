@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 if(MSVC)
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 endif()
 
 set(OPENSSL_USE_STATIC_LIBS TRUE)
@@ -26,7 +26,7 @@ target_include_directories(byebyevpn PRIVATE ${OPENSSL_INCLUDE_DIR})
 target_link_libraries(byebyevpn PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
 if(WIN32)
-    target_link_libraries(byebyevpn PRIVATE ws2_32 iphlpapi crypt32)
+    target_link_libraries(byebyevpn PRIVATE ws2_32 iphlpapi crypt32 advapi32 user32 gdi32)
     add_compile_definitions(NOMINMAX _CRT_SECURE_NO_WARNINGS)
 
     if(MSVC)

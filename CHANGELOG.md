@@ -1,5 +1,85 @@
 # Changelog
 
+## v2.5.8 - 2026-05-08
+
+internal-only release. **no behaviour, no scoring, no on-the-wire payload
+change.** one big refactor + a few perf wins.
+
+### refactor: monolith -> modular tree
+
+`src/byebyevpn.cpp` (5799 lines, one translation unit) is split into 28
+`.cpp` + 27 `.h` files under `src/`:
+
+```
+src/
+  main.cpp
+  common/      config, console, util, tspu, winhdr
+  net/         dns, tcp, udp, http, icmp
+  geoip/       geoip (9 providers)
+  scan/        ports, tcp_scan, udp_probes, fingerprint, tls, tls_ctx,
+               https_probe, sni, brand, j3, snitch, ct
+  local/       adapters, routes, processes, configs
+  app/         report, target, orchestrator, cli
+```
+
+every struct, every probe, every output string stays byte-identical to
+v2.5.7 - verified by diffing orchestrator output / verdict shape against
+v2.5.7 on the same targets. score, label, signal lists, TSPU-tier table,
+hardening text all stable.
+
+motivation:
+- 5800-line single TU rebuilt in full on every change. the split lets
+  `make -j8` rebuild only what changed.
+- lookups by feature (cert impersonation, J3 analysis, snitch latency)
+  used to need a global scroll. each module is now self-contained.
+
+### perf: shared SSL_CTX
+
+every TLS-bearing probe (`tls_probe`, `https_probe`, `sni_consistency`,
+each foreign-SNI iteration inside it) used to allocate + free its own
+`SSL_CTX`. that's ~11 ctx alloc/free cycles per host on the SNI
+consistency phase alone.
+
+new `scan/tls_ctx.{h,cpp}` exposes a single `shared_tls_client_ctx()`
+with `std::call_once` lazy init (verify=none, min=TLS 1.2, set once).
+SSL_CTX is reference-counted and thread-safe across `SSL*` objects
+(OpenSSL >= 1.1).
+
+measured on a sparse :443-only host: SNI consistency phase ~30-40ms
+faster on warm cache; on cold-cache / slow-RTT targets the win is
+inside RTT noise.
+
+### perf: misc tightening
+
+- `icontains()` in `common/util.cpp` no longer allocates two lower-cased
+  copies per call (was: `tolower(hay)` + `tolower(needle)`); now scans
+  with `std::tolower` per char. matters in `local/local.cpp` where it
+  iterates over every adapter description.
+- `https_probe` lower-cases the response body **once** instead of twice
+  per header lookup.
+- `printable_prefix` `reserve()`s `min(s.size(), lim)` upfront.
+
+### CI
+
+`.github/workflows/release.yml` now scans `src/**/*.cpp` + `src/**/*.h`
+for tool-identifying strings (was: only the deleted `src/byebyevpn.cpp`).
+cap stays at 3 matches; current count is 1 (the `--help` printf).
+
+### no behaviour change
+
+- TLS handshake bytes identical (same `TLS_client_method`,
+  `set_min_proto_version`, SNI / ALPN / curve set).
+- UDP probes identical payloads, same RAND_bytes randomization, same
+  jitter knob.
+- TCP scan / fingerprint / J3 / SNITCH / CT lookup: identical packets
+  on the wire.
+- Verdict engine: same flag thresholds, same DPI matrix output.
+
+upgrade is drop-in: same CLI, same flags, same exit codes, same on-screen
+output, same `--save` markdown header.
+
+---
+
 ## v2.5.7 - 2026-04-27
 
 small feature drop on top of v2.5.6. one user-requested feature, no

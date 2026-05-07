@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - refactor/**
   workflow_dispatch:
 
 permissions:
@@ -87,12 +89,16 @@ jobs:
       - name: verify no tool-identifying strings on wire paths
         run: |
           set -eux
-          # expected 3 non-wire matches: file banner comment, http_get scrub
-          # rationale comment, --help printf. any additional match is a regression.
-          N=$(grep -nE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' src/byebyevpn.cpp | wc -l)
+          # post-refactor the source is a modular tree under src/. expected
+          # non-wire matches: only the --help printf in src/app/cli.cpp. any
+          # additional match risks leaking the tool name into a probe /
+          # banner / log line. cap at 3 to leave headroom.
+          N=$(grep -rnE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' \
+                src --include='*.cpp' --include='*.h' | wc -l)
           if [ "$N" -gt 3 ]; then
             echo "found $N tool-identifying matches (expected <= 3):"
-            grep -nE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' src/byebyevpn.cpp
+            grep -rnE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' \
+              src --include='*.cpp' --include='*.h'
             exit 1
           fi
 

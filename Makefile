@@ -5,58 +5,82 @@ LIBS     = -lssl -lcrypto -lpthread
 
 WIN_SYS_LIBS = -lws2_32 -liphlpapi -lwinhttp -lcrypt32 -lbcrypt -ldnsapi -luser32 -ladvapi32
 
-SRC = src/byebyevpn.cpp
+# all source files in the modular tree
+SRC := \
+    src/main.cpp \
+    src/common/config.cpp \
+    src/common/console.cpp \
+    src/common/util.cpp \
+    src/common/tspu.cpp \
+    src/net/dns.cpp \
+    src/net/tcp.cpp \
+    src/net/udp.cpp \
+    src/net/http.cpp \
+    src/net/icmp.cpp \
+    src/geoip/geoip.cpp \
+    src/scan/ports.cpp \
+    src/scan/tcp_scan.cpp \
+    src/scan/udp_probes.cpp \
+    src/scan/fingerprint.cpp \
+    src/scan/tls_ctx.cpp \
+    src/scan/tls.cpp \
+    src/scan/https_probe.cpp \
+    src/scan/sni.cpp \
+    src/scan/brand.cpp \
+    src/scan/j3.cpp \
+    src/scan/snitch.cpp \
+    src/scan/ct.cpp \
+    src/local/local.cpp \
+    src/app/target.cpp \
+    src/app/orchestrator.cpp \
+    src/app/cli.cpp
+
+OBJ := $(SRC:.cpp=.o)
+
 BIN = byebyevpn
 
-# Path to prebuilt OpenSSL static archives. These are NOT shipped in the
-# repo (gitignored) — see BUILD.md for how to obtain them with verified
-# provenance (msys2 pacman package + SHA256 check).
+# path to prebuilt OpenSSL static archives (gitignored, see BUILD.md)
 WIN_OSSL_DIR ?= build-win
 
 all: $(BIN)
 
-$(BIN): $(SRC)
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $< -o $@ $(LIBS)
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BIN): $(OBJ)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(OBJ) -o $@ $(LIBS)
 
 # -----------------------------------------------------------------
-# Dynamic Windows build (requires libssl-3/libcrypto-3 DLLs next to exe)
+# dynamic windows build (requires libssl-3 / libcrypto-3 DLLs)
 # -----------------------------------------------------------------
-windows: $(SRC)
-	$(CXX) $(CXXFLAGS) -D_WIN32_WINNT=0x0A00 $(LDFLAGS) $< -o $(BIN).exe \
+WIN_OBJ := $(SRC:.cpp=.win.o)
+
+%.win.o: %.cpp
+	$(CXX) $(CXXFLAGS) -D_WIN32_WINNT=0x0A00 -c $< -o $@
+
+windows: $(WIN_OBJ)
+	$(CXX) $(CXXFLAGS) -D_WIN32_WINNT=0x0A00 $(LDFLAGS) $(WIN_OBJ) -o $(BIN).exe \
 	    -lssl -lcrypto $(WIN_SYS_LIBS)
 
 # -----------------------------------------------------------------
-# Truly static Windows build — produces ONE self-contained byebyevpn.exe
-# with no MinGW runtime DLLs and no OpenSSL DLLs required.
-#
-# Prereqs:
-#   * MinGW-w64 g++ (UCRT or MSVCRT toolchain)
-#   * Static OpenSSL archives (libssl.a + libcrypto.a) in $(WIN_OSSL_DIR)/
-#     (this repo ships them in build-win/)
+# truly static windows build — single self-contained byebyevpn.exe
 # -----------------------------------------------------------------
-windows-static: $(SRC)
+windows-static: $(WIN_OBJ)
 	$(CXX) $(CXXFLAGS) -D_WIN32_WINNT=0x0A00 \
 	    -static \
-	    $< -o $(BIN).exe \
+	    $(WIN_OBJ) -o $(BIN).exe \
 	    $(WIN_OSSL_DIR)/libssl.a $(WIN_OSSL_DIR)/libcrypto.a \
 	    $(WIN_SYS_LIBS)
-	@echo "=> $(BIN).exe  (OpenSSL + libwinpthread + libstdc++ baked in;"
-	@echo "    on Win10 1803+ runs as-is, on Win7/8 install UCRT redist:"
-	@echo "    https://www.microsoft.com/en-us/download/details.aspx?id=49093)"
+	@echo "=> $(BIN).exe  (OpenSSL + libwinpthread + libstdc++ baked in)"
 
-# -----------------------------------------------------------------
-# Linux static (glibc static is nasty; we do partial static: pthread + SSL)
-# -----------------------------------------------------------------
-static: $(SRC)
-	$(CXX) $(CXXFLAGS) -static $< -o $(BIN)-static \
+static: $(OBJ)
+	$(CXX) $(CXXFLAGS) -static $(OBJ) -o $(BIN)-static \
 	    -Wl,-Bstatic -lssl -lcrypto -Wl,-Bdynamic -lpthread -ldl
 
 # -----------------------------------------------------------------
-# Release zip: single static .exe + LICENSE + README.md + CHANGELOG.md
-# Output: byebyevpn-<VERSION>-win64.zip containing ONE runnable exe.
-# Override with:  make release-zip VERSION=v2.3
+# release zip
 # -----------------------------------------------------------------
-VERSION ?= v2.5.7
+VERSION ?= v2.5.8
 ZIP_NAME = $(BIN)-$(VERSION)-win64.zip
 
 release-zip: windows-static
@@ -72,7 +96,7 @@ install: $(BIN)
 	install -Dm755 $(BIN) $(DESTDIR)/usr/local/bin/$(BIN)
 
 clean:
-	rm -f $(BIN) $(BIN)-static $(BIN).exe $(BIN)-*-win64.zip $(BIN)-win64.zip
+	rm -f $(OBJ) $(WIN_OBJ) $(BIN) $(BIN)-static $(BIN).exe $(BIN)-*-win64.zip $(BIN)-win64.zip
 	rm -rf dist-release
 
 .PHONY: all windows windows-static static release-zip install clean

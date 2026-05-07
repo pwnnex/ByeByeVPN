@@ -17,7 +17,43 @@ endif()
 
 find_package(OpenSSL REQUIRED)
 
-add_executable(byebyevpn src/byebyevpn.cpp)
+set(BBVPN_SOURCES
+    src/main.cpp
+
+    src/common/config.cpp
+    src/common/console.cpp
+    src/common/util.cpp
+    src/common/tspu.cpp
+
+    src/net/dns.cpp
+    src/net/tcp.cpp
+    src/net/udp.cpp
+    src/net/http.cpp
+    src/net/icmp.cpp
+
+    src/geoip/geoip.cpp
+
+    src/scan/ports.cpp
+    src/scan/tcp_scan.cpp
+    src/scan/udp_probes.cpp
+    src/scan/fingerprint.cpp
+    src/scan/tls_ctx.cpp
+    src/scan/tls.cpp
+    src/scan/https_probe.cpp
+    src/scan/sni.cpp
+    src/scan/brand.cpp
+    src/scan/j3.cpp
+    src/scan/snitch.cpp
+    src/scan/ct.cpp
+
+    src/local/local.cpp
+
+    src/app/target.cpp
+    src/app/orchestrator.cpp
+    src/app/cli.cpp
+)
+
+add_executable(byebyevpn ${BBVPN_SOURCES})
 target_link_libraries(byebyevpn PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
 if(WIN32)

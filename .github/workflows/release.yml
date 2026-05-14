@@ -36,8 +36,12 @@ jobs:
       - name: cppcheck (whole src tree)
         run: |
           set -eux
+          # warning + performance + portability are the bug- and
+          # footgun-catching layers. the `style` layer is dropped: on a
+          # mature C++ codebase it is mostly opinion (const-ref loop vars,
+          # "use std::count_if") and would bury real findings in noise.
           cppcheck --std=c++20 --quiet --inline-suppr \
-            --enable=warning,style,performance,portability \
+            --enable=warning,performance,portability \
             --suppress=missingIncludeSystem \
             --error-exitcode=1 \
             src
@@ -55,10 +59,15 @@ jobs:
           # only the modules that compile on Linux are linted: the Windows
           # networking / adapter code needs the Win32 SDK headers and is
           # covered by the Windows build job instead.
+          #
+          # bugprone-* and clang-analyzer-* are the real-bug families. they
+          # gate the build (--warnings-as-errors). the broader modernize-* /
+          # readability-* opinion layers are intentionally NOT enabled.
           for f in src/common/util.cpp src/common/tspu.cpp src/common/config.cpp \
                    src/scan/ja4.cpp src/scan/ja4s_db.cpp src/scan/brand.cpp \
                    src/scan/ports.cpp; do
             clang-tidy --quiet \
+              --checks='-*,bugprone-*,clang-analyzer-*,-clang-analyzer-optin.*' \
               --warnings-as-errors='*' \
               "$f" -- -std=c++20 -Isrc
           done

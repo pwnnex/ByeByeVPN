@@ -47,6 +47,7 @@ static void save_write_stripped(const char* s, size_t n) {
 }
 
 int tee_printf(const char* fmt, ...) {
+    if (!fmt) return 0;
     // in --json mode the human-readable scan output is moved to stderr so
     // stdout carries only the final JSON object. the save file still gets
     // the full ANSI-stripped human output regardless.
@@ -55,7 +56,7 @@ int tee_printf(const char* fmt, ...) {
     va_start(ap, fmt);
     int n = vfprintf(sink, fmt, ap);
     va_end(ap);
-    if (g_save_fp && fmt) {
+    if (g_save_fp) {
         char small[2048];
         va_list ap2; va_start(ap2, fmt);
         int needed = vsnprintf(small, sizeof(small), fmt, ap2);

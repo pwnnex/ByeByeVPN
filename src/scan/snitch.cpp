@@ -71,7 +71,7 @@ SnitchResult snitch_check(const string& target_ip, int target_port, const string
     SnitchResult r; r.country_code = country_code;
     const int samples = 6;
 
-    auto anchor_job = [&](string ip, int port) {
+    auto anchor_job = [&](const string& ip, int port) {
         vector<double> xs; measure_rtt_series(ip, port, 1500, 4, xs);
         std::sort(xs.begin(), xs.end());
         if (xs.size() >= 4) xs.pop_back();

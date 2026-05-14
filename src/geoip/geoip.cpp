@@ -50,8 +50,9 @@ GeoInfo geo_iplocate(const string& ip) {
     if (ap != string::npos) {
         size_t ob = r.body.find('{', ap);
         size_t ce = ob == string::npos ? string::npos : r.body.find('}', ob);
-        if (ob != string::npos && ce != string::npos
-            && ob < (r.body.find(',', ap) == string::npos ? ce + 1 : r.body.find(',', ap)))
+        size_t comma = r.body.find(',', ap);
+        size_t guard = (comma == string::npos) ? ce + 1 : comma;
+        if (ob != string::npos && ce != string::npos && ob < guard)
             asn_block = r.body.substr(ob, ce - ob + 1);
     }
     if (!asn_block.empty()) {

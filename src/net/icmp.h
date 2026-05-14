@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // ICMP echo-based traceroute via IcmpSendEcho2 (no admin required).
 // counts hops, biggest RTT step, hops over 150ms, and tspu mgmt-subnet hits.
 #pragma once

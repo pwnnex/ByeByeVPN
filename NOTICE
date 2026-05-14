@@ -1,0 +1,30 @@
+ByeByeVPN
+Copyright (C) 2026 pwnnex
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the
+Free Software Foundation, either version 3 of the License, or (at your
+option) any later version. See the LICENSE file for the full text.
+
+-----------------------------------------------------------------------
+Licensing history
+-----------------------------------------------------------------------
+Releases up to and including v2.5.9 were distributed under the MIT
+License. Anyone who obtained those releases under MIT keeps every right
+the MIT grant gave them; that grant is not revoked retroactively.
+
+From v2.6.0 onward the project is licensed under GPL-3.0-or-later. The
+relicensing was done by the sole copyright holder (pwnnex), who authored
+every commit up to that point.
+
+-----------------------------------------------------------------------
+Third-party components
+-----------------------------------------------------------------------
+OpenSSL 3.x
+  Apache License 2.0. Statically linked. GPL-3.0 compatible.
+  https://www.openssl.org/
+
+doctest
+  MIT License. Single-header unit-test framework, used only by the
+  tests/ target, not linked into the shipped byebyevpn binary.
+  https://github.com/doctest/doctest

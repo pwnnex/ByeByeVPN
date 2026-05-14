@@ -1,5 +1,119 @@
 # Changelog
 
+## v2.6.0 - 2026-05-13
+
+a focus release. the scope is narrowed to the modern signature-less
+tunnel set, the project picks up a real test + static-analysis pipeline,
+and three new detection / output features land. the license also
+changes here.
+
+### license: MIT -> GPL-3.0-or-later
+
+releases up to and including v2.5.9 were MIT. from v2.6.0 the project is
+GPL-3.0-or-later. old MIT releases keep their MIT grant, nothing is
+revoked retroactively. the relicense was done by the sole copyright
+holder (every commit up to v2.6.0 was authored by pwnnex). see the new
+`NOTICE` file for the full licensing history. every source file carries
+an `SPDX-License-Identifier: GPL-3.0-or-later` header.
+
+### scope cut: UDP probes
+
+the UDP probe set is now WireGuard / AmneziaWG / Hysteria2 only. the
+legacy probes (OpenVPN HARD_RESET, IKEv2 ISAKMP, L2TP SCCRQ, plain DNS,
+vanilla QUIC, TUIC) were removed. those target protocols with fixed-port
+/ fixed-header signatures that any DPI already catches; probing for them
+added scan time without adding detection value for this tool's niche.
+the verdict engine, the stack-identification ladder and the TSPU rule
+table were trimmed to match.
+
+### scope cut: GeoIP providers
+
+the four HTTP-only GeoIP providers (api.2ip.me, ip-api.com,
+ip-api.com/ru, api.sypexgeo.net) were removed. a plaintext HTTP GeoIP
+query exposes the looked-up IP to every on-path observer between the
+scanner and the provider, which on a censored network is exactly the
+leak this tool is meant to help avoid. the five remaining providers
+(ipapi.is, iplocate.io, freeipapi.com, ipwho.is, ipinfo.io) are all
+HTTPS, so the lookup payload stays encrypted in transit.
+
+### new: JA4S backend-stack classifier (`src/scan/ja4s_db.{h,cpp}`)
+
+the uTLS dual-probe already computed JA4S (a ServerHello fingerprint).
+v2.6.0 adds a classifier on top: an exact seed table names a specific
+stack when the ext-hash is known (Cloudflare edge is seeded from an
+actual v2.5.9 observation), and a structural decoder emits a coarse
+TLS-version / extension-count family when it is not. the seed table is
+deliberately small and honest, meant to grow from community-submitted
+scans, not from guesses.
+
+### new: AmneziaWG S1 deep-probe (`src/scan/amnezia_probe.{h,cpp}`)
+
+a junk-prefix size sweep on the default WireGuard port. AmneziaWG shifts
+the real WG initiation packet behind `S1` random junk bytes; a vanilla
+WG listener drops that, only a listener with the matching `S1` accepts
+it. the sweep tries a dozen `S1` sizes and reports which one answered,
+which IS the server's configured `S1` obfuscation parameter. if a
+non-zero `S1` answers while vanilla WG is rejected, the verdict engine
+flags it as a recovered obfuscation parameter. no other tool recovers
+`S1` remotely.
+
+### new: --json output + meaningful exit codes
+
+`--json` emits a flat, stable JSON document on stdout (tool / version /
+target / score / label / stack / tspu / signals / geo / open_tcp / udp /
+tls_ports / snitch / trace / tcp_fp / amnezia_sweep). in `--json` mode
+the human-readable scan output is moved to stderr so stdout is
+pipe-clean.
+
+a completed full scan now exits with a verdict-tier code so wrapper
+scripts can branch without parsing output:
+
+```
+0  CLEAN (score >= 85)        2  SUSPICIOUS (50-69)
+1  NOISY (70-84)              3  OBVIOUSLY-VPN (< 50)
+64 usage error (no target)
+```
+
+### infrastructure: tests, fuzzing, hardened CI
+
+- `tests/` with doctest (single-header, MIT, not linked into the shipped
+  binary). 32 test cases / 164 assertions covering the platform-agnostic
+  logic: string helpers, the JA4 byte parsers + builders, the JA4S
+  classifier, the TSPU recognisers, the port-list builder, the brand
+  helpers. `make test`.
+- `fuzz/fuzz_ja4.cpp`: a libFuzzer harness for the JA4 byte parsers,
+  which consume attacker-controlled handshake bytes. built under
+  ASan + UBSan. `make fuzz`.
+- the platform-agnostic logic modules (`util`, `tspu`, `ja4`, `ja4s_db`,
+  `brand`, `ports`, `config`) are now cross-platform: the Windows-only
+  wide-char helpers are `#ifdef _WIN32`-guarded and `_stricmp` is
+  abstracted, so the test + analysis build runs on Linux.
+- the CI workflow gained a Linux `lint-and-test` job that runs cppcheck
+  (whole tree), the unit tests with `-Werror`, clang-tidy with
+  `--warnings-as-errors` on the agnostic modules, and a time-boxed
+  libFuzzer smoke pass. the Windows static-exe release job now gates on
+  that job passing.
+- pre-existing `-Wunused` warnings were cleaned out so `-Werror` is
+  green (NOMINMAX redefinition guard, dead `saw_other` / `phys_up` /
+  three orchestrator counters).
+
+### no on-the-wire fingerprint change
+
+the new probes do not add tool-identifying bytes. the AmneziaWG sweep
+sends only well-formed WG-shaped datagrams with randomized bodies. the
+JA4S classifier and the JSON serializer are pure in-process logic. the
+brand-string audit grep still passes at 1 / 3 (only the `--help`
+printf).
+
+### upgrade
+
+`--json` and the new exit codes are additive. the removed UDP probes
+and GeoIP providers mean a v2.6.0 scan of a host running OpenVPN / IKE /
+L2TP on default ports will no longer name those protocols by their UDP
+handshake; the TCP-side signals (open default port, etc.) still fire.
+
+---
+
 ## v2.5.9 - 2026-05-08
 
 three new detection vectors. no payload changes to the wire shapes

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "sni.h"
 #include "tls.h"
 #include "brand.h"

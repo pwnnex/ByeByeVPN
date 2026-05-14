@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // global config knobs. set by main() from the cli, read everywhere.
 // keep this header tiny: only what really needs to be globally visible.
 #pragma once
@@ -26,6 +27,11 @@ extern bool g_udp_jitter;  // 50-300ms random delay between UDP probes
 extern bool        g_save_requested;
 extern FILE*       g_save_fp;
 extern std::string g_save_path;
+
+// --json: emit a machine-readable JSON report on stdout. when set, the
+// human-readable scan output is redirected to stderr so stdout carries
+// only the JSON object (pipe-friendly).
+extern bool g_json;
 
 // port-scan selection
 extern PortMode         g_port_mode;

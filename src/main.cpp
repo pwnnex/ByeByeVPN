@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // entry point: WSAStartup + OpenSSL init, CLI arg parsing, dispatch.
 #include "common/winhdr.h"
 #include "common/console.h"
@@ -17,6 +18,7 @@
 #include "app/cli.h"
 #include "app/orchestrator.h"
 #include "app/target.h"
+#include "app/json_report.h"
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -60,6 +62,7 @@ int main(int argc, char** argv) {
         else if (a == "--no-geoip")   g_no_geoip = true;
         else if (a == "--no-ct")      g_no_ct = true;
         else if (a == "--udp-jitter") g_udp_jitter = true;
+        else if (a == "--json")       g_json = true;
         else if (a == "--save") {
             g_save_requested = true;
             if (i + 1 < argc) {
@@ -138,44 +141,54 @@ int main(int argc, char** argv) {
                                  lt->tm_hour, lt->tm_min, lt->tm_sec);
             if (!pos.empty())
                 std::fprintf(g_save_fp, "**Target:** `%s`  \n", pos.back().c_str());
-            std::fprintf(g_save_fp, "**Scanner version:** v2.5.9  \n\n");
+            std::fprintf(g_save_fp, "**Scanner version:** v2.6.0  \n\n");
             std::fprintf(g_save_fp, "```\n");
         }
     }
 
     banner();
     int rc = 0;
+    // exit-code helper: a completed full scan exits 0/1/2/3 by verdict tier
+    // so wrapper scripts can branch without parsing output.
+    //   0 = CLEAN, 1 = NOISY, 2 = SUSPICIOUS, 3 = OBVIOUSLY-VPN
+    // usage / runtime errors use 64 (EX_USAGE) to stay out of that range.
+    auto verdict_exit = [](const FullReport& R) -> int {
+        if (R.score >= 85) return 0;
+        if (R.score >= 70) return 1;
+        if (R.score >= 50) return 2;
+        return 3;
+    };
     if (pos.empty()) {
         interactive();
     } else {
         string cmd = pos[0];
         if (cmd == "scan" || cmd == "full") {
-            if (pos.size() < 2) { printf("need target\n"); rc = 2; goto done; }
-            run_full_target(pos[1]);
+            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
+            FullReport R = run_full_target(pos[1]);
+            if (g_json) std::fputs(json_report(R).c_str(), stdout);
+            rc = verdict_exit(R);
         } else if (cmd == "ports") {
-            if (pos.size() < 2) { printf("need target\n"); rc = 2; goto done; }
+            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
             auto rs = resolve_host(pos[1]);
             auto op = scan_tcp(rs.primary_ip.empty() ? pos[1] : rs.primary_ip,
                                build_tcp_ports(), g_threads, g_tcp_to);
             for (auto& o: op)
                 printf("  :%-5d  %lldms  %s\n", o.port, o.connect_ms, port_hint(o.port));
         } else if (cmd == "udp") {
-            if (pos.size() < 2) { printf("need target\n"); rc = 2; goto done; }
+            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
             auto rs = resolve_host(pos[1]); string ip = rs.primary_ip.empty() ? pos[1] : rs.primary_ip;
-            auto show = [&](const char* n, int p, UdpResult u){
+            auto show = [&](const char* n, int p, const UdpResult& u){
                 printf("  UDP:%-5d  %-22s  %s\n", p, n,
                     u.responded ? ("RESP " + std::to_string(u.bytes) + "B " + u.reply_hex).c_str()
                                 : ("no answer (" + u.err + ")").c_str());
             };
-            show("DNS",       53,    dns_probe(ip, 53));
-            show("IKEv2",     500,   ike_probe(ip, 500));
-            show("IKE NAT-T", 4500,  ike_probe(ip, 4500));
-            show("OpenVPN",   1194,  openvpn_probe(ip, 1194));
-            show("QUIC",      443,   quic_probe(ip, 443));
-            show("WireGuard", 51820, wireguard_probe(ip, 51820));
-            show("Tailscale", 41641, wireguard_probe(ip, 41641));
+            show("WireGuard",      51820, wireguard_probe(ip, 51820));
+            show("AmneziaWG Sx=8", 51820, amneziawg_probe(ip, 51820));
+            show("AmneziaWG Sx=8", 55555, amneziawg_probe(ip, 55555));
+            show("Hysteria2 QUIC", 36712, hysteria2_probe(ip, 36712));
+            show("Hysteria2 QUIC", 443,   hysteria2_probe(ip, 443));
         } else if (cmd == "tls") {
-            if (pos.size() < 2) { printf("need target\n"); rc = 2; goto done; }
+            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
             int port = pos.size() >= 3 ? std::atoi(pos[2].c_str()) : 443;
             auto rs = resolve_host(pos[1]);
             string ip = rs.primary_ip.empty() ? pos[1] : rs.primary_ip;
@@ -202,7 +215,7 @@ int main(int argc, char** argv) {
             else
                 printf("  => cert varies per SNI (multi-tenant TLS, NOT Reality)\n");
         } else if (cmd == "j3") {
-            if (pos.size() < 2) { printf("need target\n"); rc = 2; goto done; }
+            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
             int port = pos.size() >= 3 ? std::atoi(pos[2].c_str()) : 443;
             auto rs = resolve_host(pos[1]); string ip = rs.primary_ip.empty() ? pos[1] : rs.primary_ip;
             auto probes = j3_probes(ip, port);
@@ -212,29 +225,22 @@ int main(int argc, char** argv) {
                     p.responded ? printable_prefix(p.first_line, 60).c_str() : "(dropped)");
         } else if (cmd == "geoip") {
             string ip = pos.size() >= 2 ? pos[1] : "";
-            auto f1 = std::async(std::launch::async, geo_ipapi_is,   ip);
-            auto f2 = std::async(std::launch::async, geo_iplocate,   ip);
-            auto f3 = std::async(std::launch::async, geo_freeipapi,  ip);
-            auto f4 = std::async(std::launch::async, geo_2ip_ru,     ip);
-            auto f5 = std::async(std::launch::async, geo_ipapi_ru,   ip);
-            auto f6 = std::async(std::launch::async, geo_sypex,      ip);
-            auto f7 = std::async(std::launch::async, geo_ip_api_com, ip);
-            auto f8 = std::async(std::launch::async, geo_ipwho_is,   ip);
-            auto f9 = std::async(std::launch::async, geo_ipinfo_io,  ip);
-            printf("  %s-- EU --%s\n", col(C::BOLD), col(C::RST));
+            auto f1 = std::async(std::launch::async, geo_ipapi_is,  ip);
+            auto f2 = std::async(std::launch::async, geo_iplocate,  ip);
+            auto f3 = std::async(std::launch::async, geo_freeipapi, ip);
+            auto f4 = std::async(std::launch::async, geo_ipwho_is,  ip);
+            auto f5 = std::async(std::launch::async, geo_ipinfo_io, ip);
+            printf("  %s-- 5 HTTPS providers --%s\n", col(C::BOLD), col(C::RST));
             print_geo(f1.get()); print_geo(f2.get()); print_geo(f3.get());
-            printf("  %s-- RU --%s\n", col(C::BOLD), col(C::RST));
-            print_geo(f4.get()); print_geo(f5.get()); print_geo(f6.get());
-            printf("  %s-- global --%s\n", col(C::BOLD), col(C::RST));
-            print_geo(f7.get()); print_geo(f8.get()); print_geo(f9.get());
+            print_geo(f4.get()); print_geo(f5.get());
         } else if (cmd == "local" || cmd == "me" || cmd == "self") {
             run_local_analysis();
         } else if (cmd == "snitch") {
-            if (pos.size() < 2) { printf("need target\n"); rc = 2; goto done; }
+            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
             int port = pos.size() >= 3 ? std::atoi(pos[2].c_str()) : 443;
             auto rs = resolve_host(pos[1]);
             string ip = rs.primary_ip.empty() ? pos[1] : rs.primary_ip;
-            auto g = geo_ip_api_com(ip);
+            auto g = geo_ipapi_is(ip);
             string cc = g.country_code;
             auto sn = snitch_check(ip, port, cc);
             printf("  target=%s  port=%d  geoip=%s  asn=%s\n",
@@ -246,7 +252,7 @@ int main(int argc, char** argv) {
             printf("  expected-min for %s = %.0fms\n", cc.c_str(), sn.expected_min_ms);
             printf("  => %s\n", sn.summary.c_str());
         } else if (cmd == "trace" || cmd == "traceroute") {
-            if (pos.size() < 2) { printf("need target\n"); rc = 2; goto done; }
+            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
             auto rs = resolve_host(pos[1]);
             string ip = rs.primary_ip.empty() ? pos[1] : rs.primary_ip;
             int maxh = pos.size() >= 3 ? std::atoi(pos[2].c_str()) : 18;
@@ -262,7 +268,10 @@ int main(int argc, char** argv) {
         } else if (cmd == "help" || cmd == "--help") {
             help();
         } else {
-            run_full_target(cmd);
+            // bare argument: treat as a target for a full scan.
+            FullReport R = run_full_target(cmd);
+            if (g_json) std::fputs(json_report(R).c_str(), stdout);
+            rc = verdict_exit(R);
         }
     }
 done:

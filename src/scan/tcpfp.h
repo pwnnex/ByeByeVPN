@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // TCP stack fingerprint without admin / raw socket.
 //
 // classic p0f reads SYN-ACK options (mss, wscale, sack, ts, options order) to

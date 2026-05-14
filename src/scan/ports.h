@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // port-list builder + per-port reference hint string.
 #pragma once
 

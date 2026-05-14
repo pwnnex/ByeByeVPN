@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "ct.h"
 #include "../net/http.h"
 #include "../common/util.h"

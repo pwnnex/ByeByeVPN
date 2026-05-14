@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // brand-impersonation detector. given a TLS cert + the host's GeoIP ASN,
 // flag setups where a famous-brand cert (amazon/microsoft/yandex/etc.) is
 // served by an ASN that doesn't belong to that brand — the Reality-static

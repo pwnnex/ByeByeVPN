@@ -236,4 +236,4 @@ exe 和 zip 的 SHA256 供验证。
 
 ### 许可证
 
-MIT。见 [LICENSE](LICENSE)。
+GPL-3.0-or-later。见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。v2.5.9 及更早版本为 MIT，自 v2.6.0 起为 GPL-3.0-or-later。

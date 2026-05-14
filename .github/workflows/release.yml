@@ -1,18 +1,85 @@
-name: release
+name: ci
 
 on:
   push:
     tags:
       - 'v*'
     branches:
-      - refactor/**
+      - main
+      - 'v2.6.0'
+      - 'ci/**'
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  # -------------------------------------------------------------------
+  # Linux: static analysis + unit tests + a libFuzzer smoke pass. runs
+  # on every push / PR. the Windows release job gates on this passing.
+  # -------------------------------------------------------------------
+  lint-and-test:
+    name: lint + unit tests + fuzz smoke (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++ clang clang-tidy cppcheck libssl-dev make
+
+      - name: cppcheck (whole src tree)
+        run: |
+          set -eux
+          cppcheck --std=c++20 --quiet --inline-suppr \
+            --enable=warning,style,performance,portability \
+            --suppress=missingIncludeSystem \
+            --error-exitcode=1 \
+            src
+
+      - name: build + run unit tests (-Werror)
+        run: |
+          set -eux
+          # the test target builds the platform-agnostic logic modules
+          # plus the doctest driver. -Werror here so a warning fails CI.
+          make test CXX='g++ -Werror'
+
+      - name: clang-tidy (platform-agnostic modules)
+        run: |
+          set -eux
+          # only the modules that compile on Linux are linted: the Windows
+          # networking / adapter code needs the Win32 SDK headers and is
+          # covered by the Windows build job instead.
+          for f in src/common/util.cpp src/common/tspu.cpp src/common/config.cpp \
+                   src/scan/ja4.cpp src/scan/ja4s_db.cpp src/scan/brand.cpp \
+                   src/scan/ports.cpp; do
+            clang-tidy --quiet \
+              --warnings-as-errors='*' \
+              "$f" -- -std=c++20 -Isrc
+          done
+
+      - name: libFuzzer smoke pass on the JA4 parsers
+        run: |
+          set -eux
+          make fuzz FUZZ_CXX='clang++'
+          # short time-boxed run: catches obvious memory-safety regressions
+          # in the byte parsers without holding up CI. a real campaign runs
+          # this for hours, not 45 seconds.
+          ./fuzz_ja4 -max_total_time=45 -timeout=10
+
+  # -------------------------------------------------------------------
+  # Windows: the actual static-exe release build. gates on lint-and-test.
+  # only a tag push produces the uploaded artifact; branch / PR pushes
+  # just prove the Windows build still links.
+  # -------------------------------------------------------------------
   windows-static:
+    name: static exe (Windows)
+    needs: lint-and-test
     runs-on: windows-latest
     defaults:
       run:
@@ -89,10 +156,10 @@ jobs:
       - name: verify no tool-identifying strings on wire paths
         run: |
           set -eux
-          # post-refactor the source is a modular tree under src/. expected
-          # non-wire matches: only the --help printf in src/app/cli.cpp. any
-          # additional match risks leaking the tool name into a probe /
-          # banner / log line. cap at 3 to leave headroom.
+          # the source is a modular tree under src/. expected non-wire
+          # matches: only the --help printf in src/app/cli.cpp. any extra
+          # match risks leaking the tool name into a probe / banner / log
+          # line. cap at 3 to leave headroom.
           N=$(grep -rnE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' \
                 src --include='*.cpp' --include='*.h' | wc -l)
           if [ "$N" -gt 3 ]; then
@@ -114,10 +181,13 @@ jobs:
         id: zipper
         run: |
           set -eux
+          # GITHUB_REF_NAME on a branch push can contain a slash; sanitize
+          # it so the zip name is always a single path component.
           VER="${GITHUB_REF_NAME:-dev}"
-          NAME="byebyevpn-${VER}-win64.zip"
+          SAFE_VER=$(echo "$VER" | tr '/' '_')
+          NAME="byebyevpn-${SAFE_VER}-win64.zip"
           mkdir -p dist-release
-          cp byebyevpn.exe LICENSE README.md CHANGELOG.md dist-release/
+          cp byebyevpn.exe LICENSE NOTICE README.md CHANGELOG.md dist-release/
           (cd dist-release && zip -9 "../${NAME}" *)
           ZH=$(sha256sum "${NAME}" | awk '{print $1}')
           echo "zip_name=${NAME}" >> "$GITHUB_OUTPUT"

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "local.h"
 #include "../common/winhdr.h"
 #include "../common/console.h"
@@ -222,10 +223,10 @@ void run_local_analysis() {
 
     auto adapters = list_local_adapters();
     printf("%s[1/4] Network adapters%s\n", col(C::BOLD), col(C::RST));
-    int vpn_up = 0, phys_up = 0;
+    int vpn_up = 0;
     for (auto& A: adapters) {
         if (!A.is_up) continue;
-        if (A.is_vpn) ++vpn_up; else if (!A.ipv4.empty()) ++phys_up;
+        if (A.is_vpn) ++vpn_up;
         const char* tag = A.is_vpn ? "[VPN]" : "     ";
         const char* clr = A.is_vpn ? C::YEL : C::DIM;
         printf("  %s%s%s  %s%s%s  ifidx=%lu  mtu=%lu\n",

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // non-blocking TCP connect with timeout, plus thin send/recv wrappers.
 // classifies failure modes (refused / timeout / other / dns) so the
 // caller can give meaningful diagnostics.

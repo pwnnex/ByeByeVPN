@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // local-machine analysis: list adapters, routes, running VPN processes,
 // installed VPN config dirs, and print a split-tunnel summary.
 #pragma once

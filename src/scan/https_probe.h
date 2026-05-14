@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // active HTTP/1.1 probe over an established TLS session. real web servers
 // emit a sane HTTP response line + Server header; stream-layer proxies
 // (Xray/Trojan/SS-AEAD) close, return garbage, or canned fallback.

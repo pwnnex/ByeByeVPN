@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // dual-flavored TLS handshake probe.
 //
 // per port the orchestrator runs TWO TLS handshakes:

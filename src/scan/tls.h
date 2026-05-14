@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // TLS handshake probe: version / cipher / ALPN / group / cert intel.
 #pragma once
 

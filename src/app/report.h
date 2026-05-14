@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // FullReport: every observation a single target scan produces. lives long
 // enough for the orchestrator to populate it and the verdict engine to read.
 #pragma once
@@ -16,6 +17,7 @@
 #include "../scan/ct.h"
 #include "../scan/utls.h"
 #include "../scan/tcpfp.h"
+#include "../scan/amnezia_probe.h"
 
 #include <optional>
 #include <string>
@@ -27,12 +29,21 @@ struct Advice {
     std::string text;
 };
 
+// one UDP probe result tagged by protocol kind. since v2.6.0 two probes
+// can target the same port (vanilla WireGuard vs AmneziaWG both on 51820),
+// so the verdict engine keys on `kind`, not just `port`.
+struct UdpProbeRec {
+    int         port = 0;
+    std::string kind;        // "wg" / "amnezia" / "hysteria2"
+    UdpResult   result;
+};
+
 struct FullReport {
     std::string target;
     Resolved    dns;
     std::vector<GeoInfo> geos;
     std::vector<TcpOpen> open_tcp;
-    std::vector<std::pair<int, UdpResult>> udp_probes;
+    std::vector<UdpProbeRec> udp_probes;
 
     struct PortFp {
         int      port = 0;
@@ -49,12 +60,9 @@ struct FullReport {
     };
     std::vector<PortFp> fps;
 
-    UdpResult quic;
-
     // v2.4 phases
     std::optional<SnitchResult>          snitch;
     std::optional<TraceResult>           trace;
-    std::vector<std::pair<int,UdpResult>> udp_extra;
     std::optional<FpResult>              sstp;
 
     // v2.5.5 — scan-phase stats + blackhole detector
@@ -64,9 +72,23 @@ struct FullReport {
     // v2.5.9 - per-host TCP behavior fingerprint (no admin, no raw socket).
     std::optional<TcpFp> tcp_fp;
 
+    // v2.6.0 - AmneziaWG S1 junk-prefix size sweep on the default WG port.
+    std::optional<AmneziaSweep> amnezia_sweep;
+
     // verdict
     int                      score = 0;
     std::string              label;
     std::vector<Advice>      advices;
     std::vector<std::string> guess_stack;
+
+    // v2.6.0 - verdict fields captured for the --json report. these are
+    // computed as locals in the verdict block and mirrored here so the
+    // JSON serializer does not have to re-derive anything.
+    std::string                                     stack_name;
+    std::vector<std::string>                        signals_major;
+    std::vector<std::string>                        signals_minor;
+    std::vector<std::pair<std::string,std::string>> notes;       // (tag, text)
+    std::string                                     tspu_tier;   // PASS / THROTTLE / BLOCK / IMMEDIATE-BLOCK
+    int                                             tspu_a_hits = 0;
+    int                                             tspu_b_hits = 0;
 };

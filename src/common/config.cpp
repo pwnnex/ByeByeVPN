@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "config.h"
 
 bool g_no_color = false;
@@ -14,6 +15,8 @@ bool g_udp_jitter = false;
 bool        g_save_requested = false;
 FILE*       g_save_fp        = nullptr;
 std::string g_save_path;
+
+bool g_json = false;
 
 PortMode         g_port_mode = PortMode::FULL;
 int              g_range_lo  = 1;

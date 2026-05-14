@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // drives the 8-phase scan pipeline against one target and returns the
 // fully-populated report (including the verdict block).
 #pragma once

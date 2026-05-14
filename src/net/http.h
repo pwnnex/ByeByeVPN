@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // minimal WinHTTP GET wrapper used by GeoIP + crt.sh.
 // no UA string, no extra headers — bare GET against JSON endpoints.
 #pragma once

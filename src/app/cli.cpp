@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "cli.h"
 #include "orchestrator.h"
 #include "target.h"
@@ -49,19 +50,23 @@ void help() {
     printf("  --no-color      disable ANSI colors\n");
     printf("  -v / --verbose  verbose\n\n");
     printf("Stealth / privacy (opt-outs for 3rd-party-service leakage and\n");
-    printf("behavioural-burst fingerprint — default OFF, full scan behaviour):\n");
+    printf("behavioural-burst fingerprint, default OFF, full scan behaviour):\n");
     printf("  --stealth       enable --no-geoip + --no-ct + --udp-jitter together\n");
-    printf("  --no-geoip      skip all 9 3rd-party GeoIP/ASN lookups (target IP stays local)\n");
+    printf("  --no-geoip      skip all 3rd-party GeoIP/ASN lookups (target IP stays local)\n");
     printf("  --no-ct         skip crt.sh Certificate Transparency lookup (cert SHA stays local)\n");
     printf("  --udp-jitter    add 50-300ms random delay between UDP probes (smears port burst)\n\n");
-    printf("Save scan output to file (#7):\n");
+    printf("Output:\n");
+    printf("  --json           emit a machine-readable JSON report on stdout; the human\n");
+    printf("                   scan output is moved to stderr so stdout is pipe-clean\n");
     printf("  --save           write the scan to '<target>.md' in the current directory\n");
     printf("  --save <path>    write the scan to <path> (still wrapped as markdown)\n");
     printf("                   ANSI colors are stripped from the file; terminal output is unchanged\n\n");
-    printf("GeoIP sources (9 providers, 3 EU / 3 RU / 3 global):\n");
-    printf("  EU:     ipapi.is, iplocate.io, freeipapi.com\n");
-    printf("  RU:     2ip.io/2ip.me, ip-api.com/ru, sypexgeo.net\n");
-    printf("  global: ip-api.com, ipwho.is, ipinfo.io\n");
+    printf("Exit codes (full scan):\n");
+    printf("  0  CLEAN (score >= 85)        2  SUSPICIOUS (50-69)\n");
+    printf("  1  NOISY (70-84)              3  OBVIOUSLY-VPN (< 50)\n");
+    printf("  64 usage error (no target)\n\n");
+    printf("GeoIP sources (5 HTTPS-only providers):\n");
+    printf("  ipapi.is, iplocate.io, freeipapi.com, ipwho.is, ipinfo.io\n");
 }
 
 static void pause_for_enter() {
@@ -115,18 +120,16 @@ void interactive() {
             string t = ask("  target IP: ");
             if (!t.empty()) {
                 auto rs = resolve_host(t); string ip = rs.primary_ip.empty() ? t : rs.primary_ip;
-                auto show = [&](const char* n, int p, UdpResult u){
+                auto show = [&](const char* n, int p, const UdpResult& u){
                     printf("  UDP:%-5d  %-22s  %s\n", p, n,
                         u.responded ? ("RESP " + std::to_string(u.bytes) + "B " + u.reply_hex).c_str()
                                     : ("no answer (" + u.err + ")").c_str());
                 };
-                show("DNS",       53,    dns_probe(ip, 53));
-                show("IKEv2",     500,   ike_probe(ip, 500));
-                show("IKE NAT-T", 4500,  ike_probe(ip, 4500));
-                show("OpenVPN",   1194,  openvpn_probe(ip, 1194));
-                show("QUIC",      443,   quic_probe(ip, 443));
-                show("WireGuard", 51820, wireguard_probe(ip, 51820));
-                show("Tailscale", 41641, wireguard_probe(ip, 41641));
+                show("WireGuard",      51820, wireguard_probe(ip, 51820));
+                show("AmneziaWG Sx=8", 51820, amneziawg_probe(ip, 51820));
+                show("AmneziaWG Sx=8", 55555, amneziawg_probe(ip, 55555));
+                show("Hysteria2 QUIC", 36712, hysteria2_probe(ip, 36712));
+                show("Hysteria2 QUIC", 443,   hysteria2_probe(ip, 443));
             }
             pause_for_enter();
         } else if (c == '4') {
@@ -183,21 +186,14 @@ void interactive() {
             pause_for_enter();
         } else if (c == '6') {
             string t = ask("  IP (blank = your IP): ");
-            auto f1 = std::async(std::launch::async, geo_ipapi_is,   t);
-            auto f2 = std::async(std::launch::async, geo_iplocate,   t);
-            auto f3 = std::async(std::launch::async, geo_freeipapi,  t);
-            auto f4 = std::async(std::launch::async, geo_2ip_ru,     t);
-            auto f5 = std::async(std::launch::async, geo_ipapi_ru,   t);
-            auto f6 = std::async(std::launch::async, geo_sypex,      t);
-            auto f7 = std::async(std::launch::async, geo_ip_api_com, t);
-            auto f8 = std::async(std::launch::async, geo_ipwho_is,   t);
-            auto f9 = std::async(std::launch::async, geo_ipinfo_io,  t);
-            printf("  %s-- EU --%s\n", col(C::BOLD), col(C::RST));
+            auto f1 = std::async(std::launch::async, geo_ipapi_is,  t);
+            auto f2 = std::async(std::launch::async, geo_iplocate,  t);
+            auto f3 = std::async(std::launch::async, geo_freeipapi, t);
+            auto f4 = std::async(std::launch::async, geo_ipwho_is,  t);
+            auto f5 = std::async(std::launch::async, geo_ipinfo_io, t);
+            printf("  %s-- 5 HTTPS providers --%s\n", col(C::BOLD), col(C::RST));
             print_geo(f1.get()); print_geo(f2.get()); print_geo(f3.get());
-            printf("  %s-- RU --%s\n", col(C::BOLD), col(C::RST));
-            print_geo(f4.get()); print_geo(f5.get()); print_geo(f6.get());
-            printf("  %s-- global --%s\n", col(C::BOLD), col(C::RST));
-            print_geo(f7.get()); print_geo(f8.get()); print_geo(f9.get());
+            print_geo(f4.get()); print_geo(f5.get());
             pause_for_enter();
         } else if (c == '7') {
             run_local_analysis();
@@ -209,10 +205,10 @@ void interactive() {
             if (!t.empty()) {
                 auto rs = resolve_host(t);
                 string ip = rs.primary_ip.empty() ? t : rs.primary_ip;
-                auto g = geo_ip_api_com(ip);
+                auto g = geo_ipapi_is(ip);
                 string cc = g.country_code;
                 auto sn = snitch_check(ip, port, cc);
-                printf("  Country (ip-api.com): %s  /  Target port: %d\n", cc.c_str(), port);
+                printf("  Country (ipapi.is): %s  /  Target port: %d\n", cc.c_str(), port);
                 printf("  median=%.1fms  min=%.1fms  max=%.1fms  stddev=%.1fms  samples=%d\n",
                        sn.median_ms, sn.min_ms, sn.max_ms, sn.stddev_ms, sn.samples);
                 printf("  Anchors:  Cloudflare=%.1fms  Google=%.1fms  Yandex=%.1fms\n",

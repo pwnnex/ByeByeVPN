@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // SNI consistency probe + Reality discriminator.
 //
 // Reality is identified by: same cert returned for every SNI AND that cert

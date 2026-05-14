@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // SNITCH-style latency / GeoIP consistency check (methodika §10.1).
 // 6 TCP samples to target + 3 parallel anchor batches (CF/Google/Yandex).
 // classifies "RTT impossibly low for claimed country" / "extra hops" /

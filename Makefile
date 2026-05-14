@@ -33,9 +33,12 @@ SRC := \
     src/scan/ja4.cpp \
     src/scan/utls.cpp \
     src/scan/tcpfp.cpp \
+    src/scan/ja4s_db.cpp \
+    src/scan/amnezia_probe.cpp \
     src/local/local.cpp \
     src/app/target.cpp \
     src/app/orchestrator.cpp \
+    src/app/json_report.cpp \
     src/app/cli.cpp
 
 OBJ := $(SRC:.cpp=.o)
@@ -83,13 +86,13 @@ static: $(OBJ)
 # -----------------------------------------------------------------
 # release zip
 # -----------------------------------------------------------------
-VERSION ?= v2.5.9
+VERSION ?= v2.6.0
 ZIP_NAME = $(BIN)-$(VERSION)-win64.zip
 
 release-zip: windows-static
 	@rm -rf dist-release && mkdir -p dist-release
 	@cp $(BIN).exe dist-release/
-	@cp LICENSE README.md CHANGELOG.md dist-release/
+	@cp LICENSE NOTICE README.md CHANGELOG.md dist-release/
 	@cd dist-release && \
 	  (command -v zip >/dev/null && zip -9 ../$(ZIP_NAME) *) || \
 	  powershell -Command "Compress-Archive -Path dist-release\\* -DestinationPath $(ZIP_NAME) -Force"
@@ -98,8 +101,40 @@ release-zip: windows-static
 install: $(BIN)
 	install -Dm755 $(BIN) $(DESTDIR)/usr/local/bin/$(BIN)
 
+# -----------------------------------------------------------------
+# unit tests (doctest, single-header, no extra deps). builds the pure
+# platform-agnostic logic modules + the test driver and runs them.
+# -----------------------------------------------------------------
+TEST_SRC := \
+    tests/test_main.cpp \
+    tests/test_util.cpp \
+    tests/test_ja4.cpp \
+    tests/test_tspu.cpp \
+    tests/test_ports.cpp \
+    tests/test_brand.cpp \
+    src/common/util.cpp \
+    src/common/tspu.cpp \
+    src/scan/ja4.cpp \
+    src/scan/ja4s_db.cpp \
+    src/scan/brand.cpp \
+    src/scan/ports.cpp \
+    src/common/config.cpp
+
+test: $(TEST_SRC)
+	$(CXX) -std=c++20 -O1 -g -Wall -Wextra -Itests $(TEST_SRC) -lcrypto -o byebyevpn-tests
+	./byebyevpn-tests
+
+# -----------------------------------------------------------------
+# libFuzzer harness for the JA4 byte parsers (clang only).
+# -----------------------------------------------------------------
+FUZZ_CXX ?= clang++
+fuzz: fuzz/fuzz_ja4.cpp src/scan/ja4.cpp
+	$(FUZZ_CXX) -std=c++20 -g -O1 -fsanitize=fuzzer,address,undefined \
+	    fuzz/fuzz_ja4.cpp src/scan/ja4.cpp -lcrypto -o fuzz_ja4
+
 clean:
 	rm -f $(OBJ) $(WIN_OBJ) $(BIN) $(BIN)-static $(BIN).exe $(BIN)-*-win64.zip $(BIN)-win64.zip
+	rm -f byebyevpn-tests fuzz_ja4
 	rm -rf dist-release
 
-.PHONY: all windows windows-static static release-zip install clean
+.PHONY: all windows windows-static static release-zip install clean test fuzz

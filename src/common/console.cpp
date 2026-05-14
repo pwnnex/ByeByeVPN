@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "console.h"
 #include "config.h"
 #include "winhdr.h"
@@ -46,9 +47,13 @@ static void save_write_stripped(const char* s, size_t n) {
 }
 
 int tee_printf(const char* fmt, ...) {
+    // in --json mode the human-readable scan output is moved to stderr so
+    // stdout carries only the final JSON object. the save file still gets
+    // the full ANSI-stripped human output regardless.
+    FILE* sink = g_json ? stderr : stdout;
     va_list ap;
     va_start(ap, fmt);
-    int n = vprintf(fmt, ap);
+    int n = vfprintf(sink, fmt, ap);
     va_end(ap);
     if (g_save_fp && fmt) {
         char small[2048];
@@ -70,8 +75,9 @@ int tee_printf(const char* fmt, ...) {
 
 int tee_puts(const char* s) {
     if (!s) return 0;
-    fputs(s, stdout);
-    fputc('\n', stdout);
+    FILE* sink = g_json ? stderr : stdout;
+    fputs(s, sink);
+    fputc('\n', sink);
     if (g_save_fp) {
         save_write_stripped(s, strlen(s));
         fputc('\n', g_save_fp);
@@ -88,6 +94,6 @@ void banner() {
     tee_puts("|____/ \\__, |\\___|____/ \\__, |\\___| \\_/  |_|   |_| \\_|");
     tee_puts("       |___/            |___/                          ");
     tee_printf("%s", col(C::RST));
-    tee_printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.5.9%s\n\n",
+    tee_printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.6.0%s\n\n",
                col(C::DIM), col(C::RST));
 }

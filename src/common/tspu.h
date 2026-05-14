@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // TSPU helpers: management-subnet recogniser, redirect-page blacklist.
 // see DanielLavrushin/tspu-docs ch. 5 / 7 / 10 for the methodology.
 #pragma once

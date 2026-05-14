@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // console output: ANSI helpers, banner, tee_printf/tee_puts (--save support).
 //
 // note: every cpp file that prints to stdout MUST include this header. the

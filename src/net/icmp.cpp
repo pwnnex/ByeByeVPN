@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "icmp.h"
 #include "../common/winhdr.h"
 #include "../common/tspu.h"

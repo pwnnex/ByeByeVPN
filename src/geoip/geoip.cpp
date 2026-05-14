@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "geoip.h"
 #include "../net/http.h"
 #include "../common/util.h"
@@ -69,25 +70,6 @@ GeoInfo geo_iplocate(const string& ip) {
     return g;
 }
 
-GeoInfo geo_ip_api_com(const string& ip) {
-    GeoInfo g; g.source = "ip-api.com";
-    string url = "http://ip-api.com/json/";
-    if (!ip.empty()) url += ip;
-    url += "?fields=status,country,countryCode,city,isp,org,as,asname,hosting,proxy,mobile,query";
-    auto r = http_get(url);
-    if (!r.ok()) { g.err = "http " + std::to_string(r.status) + " " + r.err; return g; }
-    g.ip           = json_get_str(r.body, "query");
-    g.country      = json_get_str(r.body, "country");
-    g.country_code = json_get_str(r.body, "countryCode");
-    g.city         = json_get_str(r.body, "city");
-    g.asn          = json_get_str(r.body, "as");
-    g.asn_org      = json_get_str(r.body, "isp");
-    if (g.asn_org.empty()) g.asn_org = json_get_str(r.body, "org");
-    g.is_hosting   = json_get_str(r.body, "hosting") == "true";
-    g.is_proxy     = json_get_str(r.body, "proxy")   == "true";
-    return g;
-}
-
 GeoInfo geo_ipwho_is(const string& ip) {
     GeoInfo g; g.source = "ipwho.is";
     string url = "https://ipwho.is/";
@@ -145,80 +127,5 @@ GeoInfo geo_freeipapi(const string& ip) {
     g.country      = json_get_str(r.body, "countryName");
     g.country_code = json_get_str(r.body, "countryCode");
     g.city         = json_get_str(r.body, "cityName");
-    return g;
-}
-
-GeoInfo geo_2ip_ru(const string& ip) {
-    GeoInfo g; g.source = "2ip.me (RU)";
-    string url = "http://api.2ip.me/geo.json?ip=" + ip;
-    auto r = http_get(url);
-    if (!r.ok()) { g.err = "http " + std::to_string(r.status) + " " + r.err; return g; }
-    g.ip           = json_get_str(r.body, "ip");
-    if (g.ip.empty()) g.ip = ip;
-    g.country      = json_get_str(r.body, "country");
-    if (g.country.empty()) g.country = json_get_str(r.body, "country_rus");
-    if (g.country.empty()) g.country = json_get_str(r.body, "countryName");
-    g.country_code = json_get_str(r.body, "country_code");
-    if (g.country_code.empty()) g.country_code = json_get_str(r.body, "countryCode");
-    g.city         = json_get_str(r.body, "city");
-    if (g.city.empty()) g.city = json_get_str(r.body, "city_rus");
-    if (g.city.empty()) g.city = json_get_str(r.body, "cityName");
-    string org     = json_get_str(r.body, "org");
-    if (!org.empty()) g.asn_org = org;
-    return g;
-}
-
-GeoInfo geo_ipapi_ru(const string& ip) {
-    GeoInfo g; g.source = "ip-api.com/ru (RU)";
-    string url = "http://ip-api.com/json/";
-    if (!ip.empty()) url += ip;
-    url += "?lang=ru&fields=status,country,countryCode,city,isp,org,as,asname,hosting,proxy,mobile,query";
-    auto r = http_get(url);
-    if (!r.ok()) { g.err = "http " + std::to_string(r.status) + " " + r.err; return g; }
-    g.ip           = json_get_str(r.body, "query");
-    g.country      = json_get_str(r.body, "country");
-    g.country_code = json_get_str(r.body, "countryCode");
-    g.city         = json_get_str(r.body, "city");
-    g.asn          = json_get_str(r.body, "as");
-    g.asn_org      = json_get_str(r.body, "isp");
-    if (g.asn_org.empty()) g.asn_org = json_get_str(r.body, "org");
-    g.is_hosting   = json_get_str(r.body, "hosting") == "true";
-    g.is_proxy     = json_get_str(r.body, "proxy")   == "true";
-    return g;
-}
-
-GeoInfo geo_sypex(const string& ip) {
-    GeoInfo g; g.source = "sypexgeo.net (RU)";
-    string url = "http://api.sypexgeo.net/json/" + ip;
-    auto r = http_get(url);
-    if (!r.ok()) { g.err = "http " + std::to_string(r.status) + " " + r.err; return g; }
-    g.ip           = ip;
-    // nested JSON: country.name_en / city.name_en / region.name_en
-    g.country_code = json_get_str(r.body, "iso");
-    {
-        size_t cp = r.body.find("\"country\"");
-        if (cp != string::npos) {
-            size_t ob = r.body.find('{', cp);
-            size_t ce = ob == string::npos ? string::npos : r.body.find('}', ob);
-            if (ob != string::npos && ce != string::npos) {
-                string sb = r.body.substr(ob, ce - ob + 1);
-                g.country = json_get_str(sb, "name_en");
-                if (g.country.empty()) g.country = json_get_str(sb, "name_ru");
-                if (g.country_code.empty()) g.country_code = json_get_str(sb, "iso");
-            }
-        }
-    }
-    {
-        size_t cp = r.body.find("\"city\"");
-        if (cp != string::npos) {
-            size_t ob = r.body.find('{', cp);
-            size_t ce = ob == string::npos ? string::npos : r.body.find('}', ob);
-            if (ob != string::npos && ce != string::npos) {
-                string sb = r.body.substr(ob, ce - ob + 1);
-                g.city = json_get_str(sb, "name_en");
-                if (g.city.empty()) g.city = json_get_str(sb, "name_ru");
-            }
-        }
-    }
     return g;
 }

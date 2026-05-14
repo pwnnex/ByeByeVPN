@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // JA4 family fingerprint primitives. spec: https://github.com/FoxIO-LLC/ja4
 //
 // JA4 = JA4_a + "_" + JA4_b + "_" + JA4_c

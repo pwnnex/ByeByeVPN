@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // DNS resolution. always prefers IPv4 to dodge happy-eyeballs into
 // silently-failing v6 paths on RU/CIS ISPs.
 #pragma once

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // per-port service fingerprint probes: HTTP, SSH, SOCKS5, HTTP-CONNECT,
 // shadowsocks heuristic, SSTP-over-TLS.
 #pragma once

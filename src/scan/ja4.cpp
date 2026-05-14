@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "ja4.h"
 
 #include <openssl/evp.h>

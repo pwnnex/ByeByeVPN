@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "udp.h"
 #include "../common/winhdr.h"
 #include "../common/util.h"

@@ -48,11 +48,14 @@ set(BBVPN_SOURCES
     src/scan/ja4.cpp
     src/scan/utls.cpp
     src/scan/tcpfp.cpp
+    src/scan/ja4s_db.cpp
+    src/scan/amnezia_probe.cpp
 
     src/local/local.cpp
 
     src/app/target.cpp
     src/app/orchestrator.cpp
+    src/app/json_report.cpp
     src/app/cli.cpp
 )
 

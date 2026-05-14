@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // generic helpers: string ops, hex, json scrape, name matching, etc.
 // nothing here knows about networking or scanning specifics.
 #pragma once

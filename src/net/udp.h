@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // generic UDP send-and-wait probe. caller supplies the payload; this just
 // fires-and-receives with a timeout, classifies the reply type.
 #pragma once

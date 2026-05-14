@@ -1,5 +1,15 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "util.h"
+
+// most of this file is platform-agnostic string logic and is compiled
+// into the Linux unit-test / static-analysis CI build. only the wide-char
+// helpers genuinely need the Windows API, so the winsock header is pulled
+// in only on Windows; elsewhere strings.h gives us strcasecmp.
+#ifdef _WIN32
 #include "winhdr.h"
+#else
+#include <strings.h>
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -9,6 +19,15 @@
 
 using std::string;
 using std::vector;
+
+// portable case-insensitive C-string compare.
+static int ci_strcmp(const char* a, const char* b) {
+#ifdef _WIN32
+    return _stricmp(a, b);
+#else
+    return strcasecmp(a, b);
+#endif
+}
 
 string tolower_s(string s) {
     for (auto& c: s) c = (char)std::tolower((unsigned char)c);
@@ -49,6 +68,10 @@ string hex_s(const unsigned char* d, size_t n, bool spaces) {
     return s;
 }
 
+// wide-char <-> utf-8 glue. only the Windows networking / adapter code
+// uses these; on other platforms they are unreachable stubs that exist
+// purely so the file links in the cross-platform test build.
+#ifdef _WIN32
 string ws2s(const wchar_t* w) {
     if (!w) return {};
     int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
@@ -65,6 +88,10 @@ std::wstring s2ws(const string& s) {
     MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), n);
     return w;
 }
+#else
+string      ws2s(const wchar_t*) { return {}; }
+std::wstring s2ws(const string&) { return {}; }
+#endif
 
 string json_get_str(const string& body, const string& key) {
     string pat = "\"" + key + "\"";
@@ -146,10 +173,10 @@ bool dns_name_match(const string& name, const string& pat) {
         string suffix = pat.substr(1); // ".example.com"
         if (name.size() <= suffix.size()) return false;
         size_t off = name.size() - suffix.size();
-        return _stricmp(name.c_str() + off, suffix.c_str()) == 0 &&
+        return ci_strcmp(name.c_str() + off, suffix.c_str()) == 0 &&
                name.find('.') == off;
     }
-    return _stricmp(name.c_str(), pat.c_str()) == 0;
+    return ci_strcmp(name.c_str(), pat.c_str()) == 0;
 }
 
 string extract_cn(const string& subject_oneline) {

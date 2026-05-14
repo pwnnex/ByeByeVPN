@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "tcp.h"
 
 #include <string>
@@ -17,10 +18,12 @@ SOCKET tcp_connect(const string& host, int port, int timeout_ms, string& err) {
     for (auto* p = ai; p; p = p->ai_next) if (p->ai_family == AF_INET)  ordered.push_back(p);
     for (auto* p = ai; p; p = p->ai_next) if (p->ai_family == AF_INET6) ordered.push_back(p);
     SOCKET s = INVALID_SOCKET;
-    bool saw_timeout = false, saw_refused = false, saw_other = false;
+    // we only need to distinguish refused / timeout / other for the err
+    // string; "other" is the fallthrough so it needs no explicit flag.
+    bool saw_timeout = false, saw_refused = false;
     for (auto* p: ordered) {
         s = socket(p->ai_family, SOCK_STREAM, IPPROTO_TCP);
-        if (s == INVALID_SOCKET) { saw_other = true; continue; }
+        if (s == INVALID_SOCKET) continue;
         u_long nb = 1; ioctlsocket(s, FIONBIO, &nb);
         int rc = connect(s, p->ai_addr, (int)p->ai_addrlen);
         if (rc == 0) { u_long bl = 0; ioctlsocket(s, FIONBIO, &bl); break; }
@@ -33,16 +36,11 @@ SOCKET tcp_connect(const string& host, int port, int timeout_ms, string& err) {
                 getsockopt(s, SOL_SOCKET, SO_ERROR, (char*)&se, &sl);
                 if (se == 0) { u_long bl = 0; ioctlsocket(s, FIONBIO, &bl); break; }
                 if (se == WSAECONNREFUSED) saw_refused = true;
-                else                       saw_other = true;
             } else if (sr == 0) {
                 saw_timeout = true;
-            } else {
-                saw_other = true;
             }
         } else {
-            int le = WSAGetLastError();
-            if (le == WSAECONNREFUSED) saw_refused = true;
-            else                       saw_other = true;
+            if (WSAGetLastError() == WSAECONNREFUSED) saw_refused = true;
         }
         closesocket(s); s = INVALID_SOCKET;
     }

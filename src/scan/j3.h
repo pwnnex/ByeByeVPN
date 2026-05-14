@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // J3-style active probing: 8 distinct probes per TLS port (empty/close,
 // HTTP GET, CONNECT, SSH banner, random bytes, TLS-CH-invalid-SNI,
 // abs-URI proxy GET, 0xFF junk).

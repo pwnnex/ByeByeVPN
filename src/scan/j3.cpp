@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "j3.h"
 #include "../common/winhdr.h"
 #include "../common/util.h"

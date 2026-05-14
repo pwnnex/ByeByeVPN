@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // crt.sh Certificate Transparency lookup. real public CAs MUST submit
 // every issued cert to a CT log (RFC 9162). a SHA256 returning [] means
 // the cert was never logged = private CA / internal / cloned / LE-staging.

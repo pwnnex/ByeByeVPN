@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // shared SSL_CTX for all client-side TLS probes (verify=none, min=TLS1.2).
 // previously every tls_probe / https_probe / sni_consistency call allocated
 // its own ctx + freed it again, which dominates handshake CPU when probing

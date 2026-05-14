@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // run_full_target — drives all 8 phases of the scan and runs the verdict
 // engine. this file is intentionally one big function: every signal feeds
 // every other downstream check (port set -> tls choice -> sni -> j3 -> verdict)
@@ -24,6 +25,8 @@
 #include "../scan/utls.h"
 #include "../scan/tcpfp.h"
 #include "../scan/ja4.h"
+#include "../scan/ja4s_db.h"
+#include "../scan/amnezia_probe.h"
 #include "../geoip/geoip.h"
 
 #include <algorithm>
@@ -64,20 +67,15 @@ FullReport run_full_target(const string& target) {
         printf("\n%s[2/8] GeoIP%s  SKIPPED (--no-geoip / --stealth)\n",
                col(C::BOLD), col(C::RST));
     } else {
-    printf("\n%s[2/8] GeoIP%s  (9 providers in parallel: 3 EU / 3 RU / 3 global)\n",
+    printf("\n%s[2/8] GeoIP%s  (5 HTTPS providers in parallel)\n",
            col(C::BOLD), col(C::RST));
-    auto fg_eu1 = std::async(std::launch::async, geo_ipapi_is,   R.dns.primary_ip);
-    auto fg_eu2 = std::async(std::launch::async, geo_iplocate,   R.dns.primary_ip);
-    auto fg_eu3 = std::async(std::launch::async, geo_freeipapi,  R.dns.primary_ip);
-    auto fg_ru1 = std::async(std::launch::async, geo_2ip_ru,     R.dns.primary_ip);
-    auto fg_ru2 = std::async(std::launch::async, geo_ipapi_ru,   R.dns.primary_ip);
-    auto fg_ru3 = std::async(std::launch::async, geo_sypex,      R.dns.primary_ip);
-    auto fg_gl1 = std::async(std::launch::async, geo_ip_api_com, R.dns.primary_ip);
-    auto fg_gl2 = std::async(std::launch::async, geo_ipwho_is,   R.dns.primary_ip);
-    auto fg_gl3 = std::async(std::launch::async, geo_ipinfo_io,  R.dns.primary_ip);
-    R.geos.push_back(fg_eu1.get()); R.geos.push_back(fg_eu2.get()); R.geos.push_back(fg_eu3.get());
-    R.geos.push_back(fg_ru1.get()); R.geos.push_back(fg_ru2.get()); R.geos.push_back(fg_ru3.get());
-    R.geos.push_back(fg_gl1.get()); R.geos.push_back(fg_gl2.get()); R.geos.push_back(fg_gl3.get());
+    auto fg1 = std::async(std::launch::async, geo_ipapi_is,  R.dns.primary_ip);
+    auto fg2 = std::async(std::launch::async, geo_iplocate,  R.dns.primary_ip);
+    auto fg3 = std::async(std::launch::async, geo_freeipapi, R.dns.primary_ip);
+    auto fg4 = std::async(std::launch::async, geo_ipwho_is,  R.dns.primary_ip);
+    auto fg5 = std::async(std::launch::async, geo_ipinfo_io, R.dns.primary_ip);
+    R.geos.push_back(fg1.get()); R.geos.push_back(fg2.get()); R.geos.push_back(fg3.get());
+    R.geos.push_back(fg4.get()); R.geos.push_back(fg5.get());
     for (auto& g: R.geos) print_geo(g);
     }
 
@@ -184,37 +182,50 @@ FullReport run_full_target(const string& target) {
     }
 
     // ---- 4) UDP probes -------------------------------------------------
-    printf("\n%s[4/8] UDP probes%s\n", col(C::BOLD), col(C::RST));
-    auto udp_show = [&](int port, const char* name, UdpResult u){
+    // v2.6.0 scope: only the modern signature-less tunnel set is probed.
+    // WireGuard / AmneziaWG / Hysteria2. each result lands in R.udp_probes
+    // tagged by (port, kind) so the verdict engine and the AmneziaWG
+    // deep-probe can tell vanilla-WG from AmneziaWG-junk-prefix.
+    printf("\n%s[4/8] UDP probes%s  (WireGuard / AmneziaWG / Hysteria2)\n",
+           col(C::BOLD), col(C::RST));
+    auto udp_show = [&](int port, const char* kind, const char* name, const UdpResult& u){
         const char* c = u.responded ? col(C::GRN) : col(C::DIM);
-        printf("  %sUDP:%-5d%s  %-18s  ", c, port, col(C::RST), name);
+        printf("  %sUDP:%-5d%s  %-22s  ", c, port, col(C::RST), name);
         if (u.responded) printf("%sRESP %dB%s  %s", col(C::GRN), u.bytes, col(C::RST), u.reply_hex.c_str());
         else             printf("%sno answer (%s)%s", col(C::DIM), u.err.empty()?"closed/filtered":u.err.c_str(), col(C::RST));
         printf("\n");
-        R.udp_probes.push_back({port, u});
+        R.udp_probes.push_back({port, kind, u});
     };
-    udp_show(53,    "DNS query",          dns_probe(R.dns.primary_ip, 53));
-    udp_show(500,   "IKEv2 SA_INIT",      ike_probe(R.dns.primary_ip, 500));
-    udp_show(4500,  "IKEv2 NAT-T",        ike_probe(R.dns.primary_ip, 4500));
-    udp_show(1194,  "OpenVPN HARD_RESET", openvpn_probe(R.dns.primary_ip, 1194));
-    udp_show(443,   "QUIC v1 Initial",    quic_probe(R.dns.primary_ip, 443));
-    R.quic = R.udp_probes.back().second;
-    udp_show(51820, "WireGuard handshake", wireguard_probe(R.dns.primary_ip, 51820));
-    udp_show(41641, "Tailscale handshake", wireguard_probe(R.dns.primary_ip, 41641));
+    // vanilla WireGuard on the default port.
+    udp_show(51820, "wg",        "WireGuard handshake", wireguard_probe(R.dns.primary_ip, 51820));
+    // AmneziaWG (Sx=8 junk-prefix) on the default WG port and a common
+    // AmneziaWG alt. the delta against vanilla-WG on 51820 is the signal:
+    // if AmneziaWG answers on 51820 but vanilla-WG does not, the listener
+    // is running an obfuscated WG header offset.
+    udp_show(51820, "amnezia",   "AmneziaWG Sx=8",      amneziawg_probe(R.dns.primary_ip, 51820));
+    udp_show(55555, "amnezia",   "AmneziaWG Sx=8",      amneziawg_probe(R.dns.primary_ip, 55555));
+    // Hysteria2 (QUIC v1 Initial) on its default port + :443.
+    udp_show(36712, "hysteria2", "Hysteria2 QUIC",      hysteria2_probe(R.dns.primary_ip, 36712));
+    udp_show(443,   "hysteria2", "Hysteria2 QUIC :443", hysteria2_probe(R.dns.primary_ip, 443));
 
-    auto udp_extra = [&](int port, const char* name, UdpResult u){
-        const char* c = u.responded ? col(C::GRN) : col(C::DIM);
-        printf("  %sUDP:%-5d%s  %-18s  ", c, port, col(C::RST), name);
-        if (u.responded) printf("%sRESP %dB%s  %s", col(C::GRN), u.bytes, col(C::RST), u.reply_hex.c_str());
-        else             printf("%sno answer (%s)%s", col(C::DIM), u.err.empty()?"closed/filtered":u.err.c_str(), col(C::RST));
-        printf("\n");
-        R.udp_extra.push_back({port, u});
-    };
-    udp_extra(1701,  "L2TP SCCRQ",        l2tp_probe(R.dns.primary_ip, 1701));
-    udp_extra(36712, "Hysteria2 QUIC",    hysteria2_probe(R.dns.primary_ip, 36712));
-    udp_extra(8443,  "TUIC v5",           tuic_probe(R.dns.primary_ip, 8443));
-    udp_extra(55555, "AmneziaWG Sx=8",    amneziawg_probe(R.dns.primary_ip, 55555));
-    udp_extra(51820, "AmneziaWG Sx=8",    amneziawg_probe(R.dns.primary_ip, 51820));
+    // ---- 4b) AmneziaWG S1 junk-prefix deep-probe -----------------------
+    // sweep the S1 obfuscation-prefix size on the default WG port. if a
+    // non-zero prefix gets a handshake response while vanilla WG does not,
+    // the listener is AmneziaWG and the answering prefix size IS the
+    // server's configured S1 parameter.
+    {
+        AmneziaSweep sw = amnezia_deep_probe(R.dns.primary_ip, 51820);
+        R.amnezia_sweep = sw;
+        printf("  %sAmneziaWG S1 sweep :51820%s  ", col(C::BOLD), col(C::RST));
+        for (auto& [s1, resp] : sw.sweep) {
+            printf("%s%d%s%s ", resp ? col(C::GRN) : col(C::DIM),
+                   s1, resp ? "*" : "", col(C::RST));
+        }
+        printf("\n  %s=>%s %s%s%s\n", col(C::BOLD), col(C::RST),
+               (sw.detected_s1 >= 0 && !sw.vanilla_wg_responds) ? col(C::RED) :
+               sw.any_responded ? col(C::YEL) : col(C::DIM),
+               sw.summary.c_str(), col(C::RST));
+    }
 
     // ---- 5) Fingerprint per open TCP port ------------------------------
     printf("\n%s[5/8] Service fingerprints per open port%s\n", col(C::BOLD), col(C::RST));
@@ -371,6 +382,22 @@ FullReport run_full_target(const string& target) {
                         col_v = col(C::GRN);
                     printf("        %sutls dual-probe:%s %s%s%s\n",
                            col(C::BOLD), col(C::RST), col_v, ud.verdict.c_str(), col(C::RST));
+                    // v2.6.0: classify the openssl-flavor JA4S against the
+                    // backend-stack table. names the TLS terminator when
+                    // the ext-hash is known, otherwise a structural family.
+                    {
+                        const string& js = !ud.openssl.ja4s.empty()
+                                             ? ud.openssl.ja4s : ud.chrome.ja4s;
+                        if (!js.empty()) {
+                            Ja4sInfo ji = ja4s_classify(js);
+                            const char* jc = (ji.confidence == "exact")
+                                               ? col(C::CYN) : col(C::DIM);
+                            printf("        %sJA4S stack:%s %s%s%s (%s) %s\n",
+                                   col(C::DIM), col(C::RST),
+                                   jc, ji.family.c_str(), col(C::RST),
+                                   ji.confidence.c_str(), ji.note.c_str());
+                        }
+                    }
                 }
             } else {
                 FpResult f; f.service = "TLS-FAIL";
@@ -639,14 +666,47 @@ FullReport run_full_target(const string& target) {
     else if (openset.count(443) && R.open_tcp.size() <= 3 && hosting_hits)
         note("sparse-ports", std::to_string(R.open_tcp.size()) + " TCP ports open on a hosting ASN with :443 — sparse profile; common for both minimal corporate servers and single-purpose proxy VPSes");
 
-    // ---- UDP handshake signals -------------------------------------
-    for (auto& [p,u]: R.udp_probes) {
-        if (!u.responded) continue;
-        if (p == 1194)  flag_major("OpenVPN UDP/1194 reflects HARD_RESET (protocol-level match)", 22);
-        if (p == 500)   flag_minor("IKEv2 responder on UDP/500 (IPsec endpoint)", 5);
-        if (p == 4500)  flag_minor("IKEv2 responder on UDP/4500 (IPsec endpoint)", 5);
-        if (p == 51820) flag_major("WireGuard UDP/51820 answers handshake (default port signature)", 15);
-        if (p == 41641) flag_minor("Tailscale UDP/41641 answers handshake (default port)", 5);
+    // ---- UDP handshake signals (v2.6.0: WG / AmneziaWG / Hysteria2) --
+    // vanilla WireGuard answering its handshake on the default port is a
+    // hard signature: the MessageInitiation layout is fixed and TSPU
+    // fingerprints it directly. AmneziaWG answering where vanilla-WG does
+    // not means an obfuscated header offset, still a tunnel but a harder
+    // one. Hysteria2 answering a QUIC Initial on its default port is a
+    // QUIC-tunnel signature.
+    bool wg_vanilla_replied = false;
+    bool amnezia_replied    = false;
+    bool amnezia_on_wgport  = false;
+    bool hysteria_replied   = false;
+    for (auto& rec : R.udp_probes) {
+        if (!rec.result.responded) continue;
+        if (rec.kind == "wg")        wg_vanilla_replied = true;
+        if (rec.kind == "amnezia") {
+            amnezia_replied = true;
+            if (rec.port == 51820) amnezia_on_wgport = true;
+        }
+        if (rec.kind == "hysteria2") hysteria_replied = true;
+    }
+    if (wg_vanilla_replied)
+        flag_major("WireGuard UDP/51820 answers a MessageInitiation handshake "
+                   "(fixed-layout default-port signature, directly fingerprintable by TSPU)", 15);
+    if (amnezia_on_wgport && !wg_vanilla_replied)
+        flag_major("AmneziaWG on UDP/51820: vanilla-WG header REJECTED, Sx=8 junk-prefix "
+                   "ACCEPTED. obfuscated WireGuard with a shifted header offset.", 16);
+    else if (amnezia_replied)
+        flag_major("AmneziaWG (Sx=8 junk-prefix) answers a handshake. obfuscated WireGuard listener.", 14);
+    if (hysteria_replied)
+        flag_major("Hysteria2: a QUIC v1 Initial got a response on a Hysteria2 default port "
+                   "(QUIC-based tunnel listener)", 15);
+
+    // AmneziaWG S1-sweep signal. a non-zero junk prefix answering on the
+    // default WG port while vanilla WG is rejected names the obfuscation:
+    // it is AmneziaWG and the answering prefix size is the configured S1.
+    if (R.amnezia_sweep && R.amnezia_sweep->detected_s1 >= 0
+        && !R.amnezia_sweep->vanilla_wg_responds) {
+        flag_major("AmneziaWG S1-sweep on :51820 recovered the obfuscation prefix: "
+                   "vanilla WG dropped, S1=" + std::to_string(R.amnezia_sweep->detected_s1) +
+                   " junk-prefix accepted. a fixed S1 on the default WG port is a "
+                   "coarse pattern despite the obfuscation.", 12);
     }
 
     // ---- 3x-ui / x-ui / Marzban panel-port cluster ---------------------
@@ -682,14 +742,11 @@ FullReport run_full_target(const string& target) {
     // ---- TLS posture + cert red flags ----------------------------------
     bool any_tls = false, any_reality = false;
     bool any_impersonation = false;
-    int  cert_issuers_seen_free_ca = 0;
     int  cert_fresh_ports = 0;
     int  cert_self_signed_ports = 0;
     int  cert_short_validity_ports = 0;
-    int  cert_impersonation_ports = 0;
     int  tls_not_13_ports = 0;
     int  alpn_not_h2_ports = 0;
-    int  group_not_x25519_ports = 0;
     bool sparse_vps_profile = (openset.count(443) && R.open_tcp.size() <= 3 && hosting_hits > 0);
 
     vector<string> asn_orgs_all;
@@ -712,7 +769,6 @@ FullReport run_full_target(const string& target) {
             if (!pf.tls->group.empty() && pf.tls->group != "X25519") {
                 note("kex", "KEX group on :" + std::to_string(pf.port) + " = '" + pf.tls->group +
                      "' (X25519 is preferred by modern browsers but ECDHE-P256 is perfectly valid)");
-                ++group_not_x25519_ports;
             }
             if (pf.tls->age_days > 0 && pf.tls->age_days < 14) {
                 ++cert_fresh_ports;
@@ -732,7 +788,6 @@ FullReport run_full_target(const string& target) {
                 ++cert_self_signed_ports;
             }
             if (pf.tls->is_letsencrypt) {
-                ++cert_issuers_seen_free_ca;
             }
             if (pf.tls->days_left < 0) {
                 flag_minor("cert on :" + std::to_string(pf.port) +
@@ -759,7 +814,6 @@ FullReport run_full_target(const string& target) {
                            "' but the ASN is not owned by that brand — Reality-static / "
                            "cert-cloning signature (Xray `dest=" + pf.sni->brand_claimed + "` profile)",
                            22);
-                ++cert_impersonation_ports;
                 any_impersonation = true;
             } else {
                 note("brand-legit", "cert on :" + std::to_string(pf.port) +
@@ -792,7 +846,6 @@ FullReport run_full_target(const string& target) {
                                "(origin is proxying the HTTP stream to the real brand = Reality passthrough)",
                                18);
                     if (!(pf.sni && pf.sni->cert_impersonation)) {
-                        ++cert_impersonation_ports;
                         any_impersonation = true;
                     }
                 }
@@ -848,25 +901,9 @@ FullReport run_full_target(const string& target) {
         flag_major("Microsoft SSTP VPN detected on :443 (SSTP_DUPLEX_POST / sra_{...} replied with 200 OK + 2^64-1 Content-Length) — classical SSTP endpoint", 18);
     }
 
-    // ---- v2.4 Extra VPN probes ----------------------------------------
-    for (auto& [p, u]: R.udp_extra) {
-        if (!u.responded) continue;
-        if (p == 1701)
-            flag_major("L2TP UDP/1701 responds to SCCRQ (L2TP control signature)", 15);
-        else if (p == 36712)
-            flag_major("Hysteria2 default port UDP/36712 is live (QUIC-based Hysteria tunnel)", 15);
-        else if (p == 8443)
-            flag_minor("TUIC v5 / QUIC on UDP/8443 answers handshake (modern QUIC-based proxy)", 7);
-        else if (p == 55555)
-            flag_major("AmneziaWG on UDP/55555 with Sx=8 junk prefix replies — obfuscated WireGuard", 15);
-        else if (p == 51820) {
-            bool wg_replied = false;
-            for (auto& x: R.udp_probes) if (x.first == 51820 && x.second.responded) wg_replied = true;
-            if (!wg_replied) {
-                flag_major("AmneziaWG on default UDP/51820 (vanilla-WG header REJECTED, Sx=8 junk-prefix ACCEPTED) — obfuscated WireGuard at 2026-standard obfuscation params", 16);
-            }
-        }
-    }
+    // v2.6.0: the legacy L2TP/TUIC/extra-port UDP signals were dropped
+    // together with their probes. WireGuard / AmneziaWG / Hysteria2
+    // signals are emitted in the "UDP handshake signals" block above.
 
     // ---- v2.4 SNITCH consistency ---------------------------------------
     if (R.snitch && R.snitch->ok) {
@@ -1187,10 +1224,8 @@ FullReport run_full_target(const string& target) {
 
     // ---- Stack identification -----------------------------------------
     string stack_name;
-    bool any_wg = std::any_of(R.udp_probes.begin(), R.udp_probes.end(),
-                              [](auto& x){return x.first==51820 && x.second.responded;});
-    bool any_ovpn_udp = std::any_of(R.udp_probes.begin(), R.udp_probes.end(),
-                                    [](auto& x){return x.first==1194 && x.second.responded;});
+    bool any_wg      = wg_vanilla_replied;
+    bool any_amnezia = amnezia_replied;
     bool any_canned    = (j3_canned_ports > 0);
     bool any_bad_ver   = (j3_badver_ports  > 0);
     bool any_short_val = (cert_short_validity_ports > 0);
@@ -1216,10 +1251,14 @@ FullReport run_full_target(const string& target) {
     else if (xui_cluster_seen)
         stack_name = "3x-ui/x-ui/Marzban panel install (multiple preset TLS ports open) — "
                      "VLESS/Trojan/Shadowsocks multiplex likely";
-    else if (any_ovpn_udp || openset.count(1194) || openset.count(1193))
-        stack_name = "OpenVPN (plaintext wire protocol)";
+    else if (amnezia_on_wgport && !wg_vanilla_replied)
+        stack_name = "AmneziaWG (obfuscated WireGuard, shifted header offset on the default WG port)";
+    else if (any_amnezia)
+        stack_name = "AmneziaWG (obfuscated WireGuard with junk-prefix)";
+    else if (hysteria_replied)
+        stack_name = "Hysteria2 (QUIC-based tunnel)";
     else if (any_wg)
-        stack_name = "WireGuard (default UDP port)";
+        stack_name = "WireGuard (default UDP port, fixed-layout handshake)";
     else if (openset.count(8388) || openset.count(8488))
         stack_name = "Shadowsocks (naked default port)";
     else if (proxy_middleware_seen)
@@ -1233,6 +1272,12 @@ FullReport run_full_target(const string& target) {
     printf("\n  %sStack identified:%s  %s%s%s\n",
            col(C::BOLD), col(C::RST),
            col(C::CYN), stack_name.c_str(), col(C::RST));
+
+    // v2.6.0: mirror the verdict locals onto the report for --json.
+    R.stack_name    = stack_name;
+    R.signals_major = signals_major;
+    R.signals_minor = signals_minor;
+    R.notes         = notes;
 
     if (!port_roles.empty()) {
         printf("\n  %sPer-port classification:%s\n", col(C::BOLD), col(C::RST));
@@ -1269,13 +1314,14 @@ FullReport run_full_target(const string& target) {
                           "no default VPN ports among open set");
     }
     {
-        bool ovpn = any_ovpn_udp || openset.count(1194);
-        bool wg   = any_wg;
-        bool ike  = false;
-        for (auto& [p,u]: R.udp_probes) if ((p==500||p==4500) && u.responded) ike = true;
-        if (ovpn || wg)       axis("Protocol handshake signature", "HIGH",
-                                   string(ovpn?"OpenVPN ":"") + (wg?"WireGuard":"") + " signature matched");
-        else if (ike)         axis("Protocol handshake signature", "MEDIUM", "IKEv2 responds on control ports");
+        if (any_wg || amnezia_on_wgport)
+            axis("Protocol handshake signature", "HIGH",
+                 amnezia_on_wgport ? "AmneziaWG obfuscated handshake matched"
+                                   : "WireGuard MessageInitiation matched");
+        else if (any_amnezia || hysteria_replied)
+            axis("Protocol handshake signature", "HIGH",
+                 string(any_amnezia ? "AmneziaWG " : "") +
+                 (hysteria_replied ? "Hysteria2 " : "") + "tunnel handshake matched");
         else if (any_reality) axis("Protocol handshake signature", "LOW", "TLS 1.3 handshake looks normal (Reality identified by cert-steering, not handshake bytes)");
         else if (any_tls)     axis("Protocol handshake signature", "LOW", "TLS handshake looks normal");
         else                  axis("Protocol handshake signature", "NONE", "no TLS / no VPN protocol replies");
@@ -1508,17 +1554,28 @@ FullReport run_full_target(const string& target) {
         sug("reality-multiport", buf);
         any_sug = true;
     }
-    if (any_ovpn_udp || openset.count(1194) || openset.count(1193)) {
-        sug("openvpn",
-            "OpenVPN on default port 1194: TSPU/GFW drop this on the first HARD_RESET.\n"
-            "      Wrap in TLS (stunnel / Cloak) or migrate to VLESS+Reality on :443.");
-        any_sug = true;
-    }
     if (any_wg) {
         sug("wireguard",
-            "WireGuard on UDP/51820 answers its handshake — the handshake is a fixed-offset\n"
-            "      signature TSPU already has. Use amneziawg (obfuscated WG) or tunnel WG\n"
-            "      inside a TCP-TLS wrapper if you need to survive active DPI.");
+            "WireGuard on UDP/51820 answers its handshake. the MessageInitiation\n"
+            "      layout is a fixed-offset signature TSPU already has. use AmneziaWG\n"
+            "      (obfuscated WG) or tunnel WG inside a TCP-TLS wrapper if you need\n"
+            "      to survive active DPI.");
+        any_sug = true;
+    }
+    if (any_amnezia) {
+        sug("amneziawg",
+            "AmneziaWG answers a junk-prefix handshake. obfuscation is on, which is\n"
+            "      good, but a fixed Sx prefix size + a default port is still a coarse\n"
+            "      pattern. randomize the obfuscation params (Jc/Jmin/Jmax/S1/S2) per\n"
+            "      deployment and move off the default WG port.");
+        any_sug = true;
+    }
+    if (hysteria_replied) {
+        sug("hysteria2",
+            "Hysteria2 answers a QUIC Initial on a default port. QUIC-on-UDP to a\n"
+            "      hosting-ASN IP with no matching web presence is itself a soft\n"
+            "      anomaly. front it with a real HTTP/3 site on the same IP or move\n"
+            "      off the default Hysteria2 port range.");
         any_sug = true;
     }
     if (openset.count(8388) || openset.count(8488)) {
@@ -1683,22 +1740,12 @@ FullReport run_full_target(const string& target) {
     {
         struct TspuRule { const char* name; bool hit; const char* why; };
         vector<TspuRule> rules;
-        bool ovpn_hit = any_ovpn_udp || openset.count(1194);
-        bool wg_hit   = any_wg;
-        bool ike_hit  = false;
-        bool l2tp_hit = false, hysteria_hit = false, amnezia_hit = false;
-        for (auto& [p,u]: R.udp_probes) if ((p==500||p==4500) && u.responded) ike_hit = true;
-        for (auto& [p,u]: R.udp_extra) {
-            if (p==1701 && u.responded) l2tp_hit = true;
-            if (p==36712 && u.responded) hysteria_hit = true;
-            if ((p==55555 || p==51820) && u.responded) amnezia_hit = true;
-        }
-        rules.push_back({"OpenVPN wire signature",      ovpn_hit,     "UDP/1194 HARD_RESET_CLIENT reply OR TCP/1194 open"});
-        rules.push_back({"WireGuard wire signature",    wg_hit,       "UDP/51820 MessageInitiation reply"});
-        rules.push_back({"AmneziaWG obfuscation",       amnezia_hit,  "WireGuard with Sx=8 junk prefix accepted (obfuscation params detected)"});
-        rules.push_back({"Hysteria2 default port",      hysteria_hit, "UDP/36712 replied to QUIC-initial"});
-        rules.push_back({"L2TP SCCRQ reply",            l2tp_hit,     "UDP/1701 L2TP control-channel signature"});
-        rules.push_back({"IKE responder",               ike_hit,      "UDP/500 or UDP/4500 IKEv2 SA_INIT reply (IPsec endpoint)"});
+        // v2.6.0 A-tier: only the modern signature-less tunnel set plus the
+        // direct TSPU-observable rules. OpenVPN / IKE / L2TP rules were
+        // dropped together with their probes.
+        rules.push_back({"WireGuard wire signature",    any_wg,       "UDP/51820 MessageInitiation reply"});
+        rules.push_back({"AmneziaWG obfuscation",       any_amnezia,  "obfuscated WireGuard (Sx junk-prefix) handshake accepted"});
+        rules.push_back({"Hysteria2 QUIC tunnel",       hysteria_replied, "QUIC v1 Initial answered on a Hysteria2 default port"});
         rules.push_back({"SSTP VPN (TLS-wrapped)",      R.sstp && R.sstp->is_vpn_like, "HTTPS/443 SSTP_DUPLEX_POST / sra_{BA195980-...} replied"});
         bool shadowsocks_default = openset.count(8388) > 0 || openset.count(8488) > 0;
         rules.push_back({"Shadowsocks default port",    shadowsocks_default, "TCP/8388 or TCP/8488 open"});
@@ -1736,7 +1783,10 @@ FullReport run_full_target(const string& target) {
                          "hop(s) in 10.X.Y.[131-235]/[241-245]/254 range - tspu site on path"});
 
         int A_hits = 0, B_hits = 0;
-        const int A_end = 11;
+        // A-tier rules are the first 8 pushed above (WireGuard, AmneziaWG,
+        // Hysteria2, SSTP, Shadowsocks-port, SOCKS5, TSPU-redirect,
+        // BGP-blackhole). everything after is B-tier (soft anomaly).
+        const int A_end = 8;
         for (size_t i = 0; i < rules.size(); ++i) {
             if (!rules[i].hit) continue;
             if ((int)i < A_end) ++A_hits; else ++B_hits;
@@ -1764,6 +1814,11 @@ FullReport run_full_target(const string& target) {
                col(tier_col), tier_name, col(C::RST), tier_desc);
         printf("    %sTSPU-tier hits:%s A=%d (protocol block) / B=%d (soft anomaly)\n",
                col(C::DIM), col(C::RST), A_hits, B_hits);
+
+        // v2.6.0: mirror the TSPU tier onto the report for --json.
+        R.tspu_tier   = tier_name;
+        R.tspu_a_hits = A_hits;
+        R.tspu_b_hits = B_hits;
         if (A_hits + B_hits > 0) {
             printf("    %sTriggered rules:%s\n", col(C::DIM), col(C::RST));
             for (size_t i = 0; i < rules.size(); ++i) {

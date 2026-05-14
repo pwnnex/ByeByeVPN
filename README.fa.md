@@ -285,6 +285,6 @@ release notes هر tag برای تأیید چاپ می‌شود.
 
 ### مجوز
 
-MIT. [LICENSE](LICENSE) را ببینید.
+GPL-3.0-or-later. [LICENSE](LICENSE) و [NOTICE](NOTICE) را ببینید. نسخه‌های تا v2.5.9 تحت MIT و از v2.6.0 تحت GPL-3.0-or-later.
 
 </div>

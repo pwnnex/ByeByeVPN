@@ -61,6 +61,20 @@ string cert_sha256_hex(X509* cert) {
     return s;
 }
 
+// JA4S is "a_b_c": a = version+extcount+alpn, b = the single negotiated
+// cipher, c = the ServerHello extension-set hash. the b part changes purely
+// because the two client flavors offer ciphers in a different preference
+// order and the server honours it — that is RFC-standard negotiation, not
+// fingerprint steering. real steering shows up in a (different ext count /
+// ALPN) or c (different ext set). so for the "does the server adapt"
+// comparison we drop b and compare a_c only.
+string ja4s_structural(const string& ja4s) {
+    size_t u1 = ja4s.find('_');
+    size_t u2 = (u1 == string::npos) ? string::npos : ja4s.find('_', u1 + 1);
+    if (u1 == string::npos || u2 == string::npos) return ja4s;
+    return ja4s.substr(0, u1) + "_" + ja4s.substr(u2 + 1);
+}
+
 void parse_captures(UtlsProbeResult& r) {
     if (!r.ch_bytes.empty()) {
         if (parse_client_hello(r.ch_bytes.data(), r.ch_bytes.size(), r.ch_fp)) {
@@ -300,15 +314,17 @@ UtlsDualProbe utls_dual_probe(const string& ip, int port, const string& sni) {
             return d;
         }
         if (!d.chrome.ja4s.empty() && !d.openssl.ja4s.empty()
-            && d.chrome.ja4s != d.openssl.ja4s) {
+            && ja4s_structural(d.chrome.ja4s) != ja4s_structural(d.openssl.ja4s)) {
             d.ja4s_differs = true;
-            d.verdict = "both handshakes completed but ServerHello (JA4S) differs between "
-                        "client flavors. server adapts its TLS parameters to client JA3 "
-                        "(utls-aware multi-stack frontend).";
+            d.verdict = "both handshakes completed but the ServerHello structure (JA4S "
+                        "version / extension set / ALPN) differs between client flavors. "
+                        "server adapts its TLS parameters to client JA3 (utls-aware "
+                        "multi-stack frontend).";
             return d;
         }
-        d.verdict = "both flavors got the same JA4S and same cert. server does not adapt "
-                    "to client fingerprint at the handshake layer.";
+        d.verdict = "both flavors got the same ServerHello structure. server does not "
+                    "adapt to client fingerprint at the handshake layer (a differing "
+                    "negotiated cipher is just normal client-preference negotiation).";
         return d;
     }
     d.verdict = "both handshakes failed. cannot infer JA3-adaptive behavior.";

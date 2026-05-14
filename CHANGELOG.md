@@ -103,10 +103,11 @@ real recent-Chrome fingerprint, never the openssl-default JA4.
 ### infrastructure: tests, fuzzing, sanitizers, signed releases, hardened CI
 
 - `tests/` with doctest (single-header, MIT, not linked into the shipped
-  binary). 33 test cases / 184 assertions covering the platform-agnostic
-  logic: string helpers, the JA4 byte parsers + builders, the JA4S
-  classifier, the Chrome ClientHello builder, the TSPU recognisers, the
-  port-list builder, the brand helpers. `make test`.
+  binary). 34 test cases covering the platform-agnostic logic: string
+  helpers, the JA4 byte parsers + builders, the JA4S classifier, the
+  Chrome ClientHello builder (including its GREASE / key_share
+  invariants), the TSPU recognisers, the port-list builder, the brand
+  helpers. `make test`.
 - `fuzz/fuzz_ja4.cpp`: a libFuzzer harness for the JA4 byte parsers,
   which consume attacker-controlled handshake bytes. built under
   ASan + UBSan. `make fuzz`.

@@ -53,12 +53,28 @@ std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
     std::mt19937 rng(rd());
     auto rbyte = [&]{ return (uint8_t)(rng() & 0xff); };
 
+    // GREASE values, drawn once up front. two constraints, both enforced by
+    // a strict server (OpenSSL rejects violations):
+    //   * the supported_groups GREASE and the key_share GREASE group MUST be
+    //     the same value — a KeyShareEntry has to correspond to a group
+    //     offered in supported_groups (RFC 8446 4.2.8). a mismatch is "bad
+    //     key share".
+    //   * the two bookend extension types MUST differ from each other, or it
+    //     is a duplicate extension type.
+    // the cipher-list and supported_versions GREASE values are unconstrained.
+    const uint16_t g_cipher = grease_value(rng);
+    const uint16_t g_group  = grease_value(rng);   // supported_groups + key_share
+    const uint16_t g_ver    = grease_value(rng);
+    const uint16_t g_ext1   = grease_value(rng);
+    uint16_t g_ext2 = grease_value(rng);
+    while (g_ext2 == g_ext1) g_ext2 = grease_value(rng);
+
     // ---- extensions block, built standalone so the padding extension can
     //      be sized against the finished pre-pad ClientHello length --------
     B ex;
 
     // GREASE (leading bookend) — empty body.
-    ext(ex, grease_value(rng), []{});
+    ext(ex, g_ext1, []{});
 
     // server_name (0x0000)
     ext(ex, 0x0000, [&]{
@@ -79,7 +95,7 @@ std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
     // supported_groups (0x000a) — GREASE, x25519, secp256r1, secp384r1.
     ext(ex, 0x000a, [&]{
         size_t lo = ex.mark16();
-        ex.u16(grease_value(rng));
+        ex.u16(g_group);
         ex.u16(0x001d);  // x25519
         ex.u16(0x0017);  // secp256r1
         ex.u16(0x0018);  // secp384r1
@@ -121,9 +137,10 @@ std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
     ext(ex, 0x0012, []{});
 
     // key_share (0x0033) — GREASE (1-byte key) + x25519 (32-byte key).
+    // the GREASE group here MUST equal the supported_groups GREASE.
     ext(ex, 0x0033, [&]{
         size_t lo = ex.mark16();
-        ex.u16(grease_value(rng)); ex.u16(0x0001); ex.u8(0x00);
+        ex.u16(g_group); ex.u16(0x0001); ex.u8(0x00);
         ex.u16(0x001d); ex.u16(0x0020);
         for (int i = 0; i < 32; ++i) ex.u8(rbyte());
         ex.patch16(lo);
@@ -135,7 +152,7 @@ std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
     // supported_versions (0x002b) — GREASE, TLS 1.3, TLS 1.2.
     ext(ex, 0x002b, [&]{
         size_t lo = ex.v.size(); ex.u8(0);
-        ex.u16(grease_value(rng));
+        ex.u16(g_ver);
         ex.u16(0x0304);
         ex.u16(0x0303);
         ex.v[lo] = (uint8_t)(ex.v.size() - lo - 1);
@@ -152,8 +169,8 @@ std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
     });
 
     // GREASE (trailing bookend) — Chrome's trailing GREASE ext carries a
-    // single zero byte.
-    ext(ex, grease_value(rng), [&]{ ex.u8(0x00); });
+    // single zero byte. its type must differ from the leading bookend.
+    ext(ex, g_ext2, [&]{ ex.u8(0x00); });
 
     // ---- padding (0x0015) -------------------------------------------------
     // BoringSSL pads the ClientHello to 512 bytes when the handshake message
@@ -184,7 +201,7 @@ std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
     for (int i = 0; i < 32; ++i) out.u8(rbyte());   // legacy_session_id
 
     size_t cs = out.mark16();                       // cipher_suites
-    out.u16(grease_value(rng));
+    out.u16(g_cipher);
     out.u16(0x1301); out.u16(0x1302); out.u16(0x1303);
     out.u16(0xc02b); out.u16(0xc02f); out.u16(0xc02c); out.u16(0xc030);
     out.u16(0xcca9); out.u16(0xcca8);

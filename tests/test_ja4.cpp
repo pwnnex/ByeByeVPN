@@ -226,3 +226,62 @@ TEST_CASE("build_chrome131_clienthello is a well-formed Chrome ClientHello") {
     REQUIRE(parse_client_hello(rec2.data() + 5, rec2.size() - 5, ch2));
     CHECK(ja4_client(ch2) == ja4);
 }
+
+TEST_CASE("build_chrome131_clienthello keeps the GREASE invariants") {
+    // a KeyShareEntry MUST correspond to a group offered in supported_groups
+    // (RFC 8446 4.2.8), so the GREASE group in key_share has to equal the
+    // GREASE in supported_groups, and the two bookend GREASE extension types
+    // must differ or it is a duplicate extension. a strict server (OpenSSL)
+    // rejects either violation, so guard both here. checked over many builds
+    // because the GREASE values are randomized per call.
+    auto rd16 = [](const uint8_t* p){ return (uint16_t)((p[0] << 8) | p[1]); };
+
+    for (int iter = 0; iter < 64; ++iter) {
+        auto rec = build_chrome131_clienthello("a.example.com");
+        REQUIRE(rec.size() > 5);
+        const uint8_t* hs = rec.data() + 5;
+        size_t hs_len = rec.size() - 5;
+
+        // walk to the extensions block: 4 hs header + 2 ver + 32 random
+        // + 1+sid + 2+ciphers + 2 compression.
+        size_t p = 4 + 2 + 32;
+        REQUIRE(p < hs_len);
+        p += 1 + hs[p];                       // legacy_session_id
+        REQUIRE(p + 2 <= hs_len);
+        p += 2 + rd16(hs + p);                // cipher_suites
+        REQUIRE(p + 1 <= hs_len);
+        p += 1 + hs[p];                       // compression_methods
+        REQUIRE(p + 2 <= hs_len);
+        size_t ext_total = rd16(hs + p); p += 2;
+        const uint8_t* e  = hs + p;
+        const uint8_t* ee = e + ext_total;
+        REQUIRE(ee <= hs + hs_len);
+
+        uint16_t first_ext_type = 0xffff, second_last_ext_type = 0xffff;
+        uint16_t sg_grease = 1, ks_grease = 2;   // start unequal
+        int      ext_idx = 0;
+        std::vector<uint16_t> ext_types;
+        while (e < ee) {
+            REQUIRE(ee - e >= 4);
+            uint16_t et = rd16(e);
+            uint16_t el = rd16(e + 2);
+            const uint8_t* body = e + 4;
+            REQUIRE(body + el <= ee);
+            ext_types.push_back(et);
+            if (ext_idx == 0) first_ext_type = et;
+            if (et == 0x000a)                       // supported_groups
+                sg_grease = rd16(body + 2);         // first entry after list len
+            if (et == 0x0033)                       // key_share
+                ks_grease = rd16(body + 2);         // first KeyShareEntry group
+            e += 4 + el;
+            ++ext_idx;
+        }
+        REQUIRE(ext_types.size() >= 3);
+        second_last_ext_type = ext_types[ext_types.size() - 2];
+
+        // GREASE group in key_share == GREASE in supported_groups
+        CHECK(sg_grease == ks_grease);
+        // leading and trailing bookend GREASE extension types differ
+        CHECK(first_ext_type != second_last_ext_type);
+    }
+}

@@ -6,7 +6,7 @@ on:
       - 'v*'
     branches:
       - main
-      - 'v2.6.0'
+      - 'v2.*'
       - 'ci/**'
   pull_request:
     branches:

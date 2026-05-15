@@ -81,7 +81,7 @@ string json_report(const FullReport& R) {
     j.indent = 1;
 
     j.kv_str("tool",        "byebyevpn", true);
-    j.kv_str("version",     "v2.6.0", true);
+    j.kv_str("version",     "v2.7.0", true);
     j.kv_str("target",      R.target, true);
     j.kv_str("resolved_ip", R.dns.primary_ip, true);
     j.kv_str("dns_family",  R.dns.family, true);

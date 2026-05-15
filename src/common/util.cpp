@@ -3,13 +3,17 @@
 
 // most of this file is platform-agnostic string logic and is compiled
 // into the Linux unit-test / static-analysis CI build. only the wide-char
-// helpers genuinely need the Windows API, so the winsock header is pulled
-// in only on Windows; elsewhere strings.h gives us strcasecmp.
+// helpers + Sleep / RAND_bytes glue genuinely need the platform layer.
 #ifdef _WIN32
 #include "winhdr.h"
 #else
 #include <strings.h>
+#include <unistd.h>     // usleep
 #endif
+
+#include "config.h"
+
+#include <openssl/rand.h>
 
 #include <algorithm>
 #include <cctype>
@@ -193,4 +197,30 @@ string extract_cn_from_subject(const string& subj) {
     p += 3;
     size_t e = subj.find_first_of("/,", p);
     return subj.substr(p, e == string::npos ? string::npos : e - p);
+}
+
+// shared CSPRNG byte filler — tiny wrapper so callers don't have to pull in
+// <openssl/rand.h> just to seed a shuffle.
+void csprng_bytes(unsigned char* buf, int n) { RAND_bytes(buf, n); }
+
+void stealth_sleep_ms(int min_ms, int max_ms) {
+    if (!g_stealth) return;
+    if (max_ms <= min_ms) {
+#ifdef _WIN32
+        Sleep((unsigned)min_ms);
+#else
+        usleep((useconds_t)min_ms * 1000);
+#endif
+        return;
+    }
+    unsigned char r[2];
+    csprng_bytes(r, 2);
+    unsigned span = (unsigned)(max_ms - min_ms + 1);
+    unsigned pick = (((unsigned)r[0] << 8) | r[1]) % span;
+    unsigned ms = (unsigned)min_ms + pick;
+#ifdef _WIN32
+    Sleep(ms);
+#else
+    usleep((useconds_t)ms * 1000);
+#endif
 }

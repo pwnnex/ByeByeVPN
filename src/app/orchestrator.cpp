@@ -213,7 +213,9 @@ FullReport run_full_target(const string& target) {
     // non-zero prefix gets a handshake response while vanilla WG does not,
     // the listener is AmneziaWG and the answering prefix size IS the
     // server's configured S1 parameter.
-    {
+    // skipped under --passive: a 12-datagram sweep is one of the loudest
+    // scanner patterns we emit.
+    if (!g_passive) {
         AmneziaSweep sw = amnezia_deep_probe(R.dns.primary_ip, 51820);
         R.amnezia_sweep = sw;
         printf("  %sAmneziaWG S1 sweep :51820%s  ", col(C::BOLD), col(C::RST));
@@ -270,9 +272,22 @@ FullReport run_full_target(const string& target) {
                             (tp.is_letsencrypt ? " [free-CA]" : "");
                 line(f);
                 pf.tls = tp;
-                SniConsistency sc = sni_consistency(R.dns.primary_ip, o.port, R.dns.host);
-                pf.sni = sc;
-                if (sc.reality_like && sc.passthrough_mode) {
+                // SNI consistency loop = 10 sequential TLS handshakes with
+                // rotating SNIs. distinctive scanner pattern; under
+                // --passive we skip the rotation and use a stub default
+                // (sc.base_sha stays empty, the explainer chain is skipped).
+                SniConsistency sc;
+                if (!g_passive) {
+                    sc = sni_consistency(R.dns.primary_ip, o.port, R.dns.host);
+                    pf.sni = sc;
+                } else {
+                    sc.base_sha = tp.cert_sha256;
+                    pf.sni = sc;
+                }
+                if (g_passive) {
+                    printf("        %sSNI behaviour: skipped (--passive)%s\n",
+                           col(C::DIM), col(C::RST));
+                } else if (sc.reality_like && sc.passthrough_mode) {
                     printf("        %sSNI behaviour: cert varies per SNI BUT base cert is for brand '%s' — Reality with real passthrough to dest= (stealth-optimised)%s\n",
                            col(C::RED), sc.matched_foreign_sni.c_str(), col(C::RST));
                 } else if (sc.reality_like) {
@@ -360,7 +375,9 @@ FullReport run_full_target(const string& target) {
                 // dual probe. detects JA3-adaptive servers (utls-aware reality,
                 // multi-stack CDN routers). two extra handshakes per TLS port.
                 // results are stored on PortFp.utls, consumed in the verdict block.
-                {
+                // skipped under --passive: chrome+openssl back-to-back on one
+                // port is a distinctive scanner pair.
+                if (!g_passive) {
                     UtlsDualProbe ud = utls_dual_probe(R.dns.primary_ip, o.port, R.dns.host);
                     pf.utls = ud;
                     auto fmt_one = [&](const UtlsProbeResult& u) {
@@ -431,7 +448,12 @@ FullReport run_full_target(const string& target) {
     }
 
     // ---- 6) J3 active probing per TLS-like port ------------------------
-    printf("\n%s[6/8] J3 / TSPU active probing%s\n", col(C::BOLD), col(C::RST));
+    // skipped under --passive: even shuffled, this is 8 distinct probes per
+    // TLS-like port and the loudest signal we emit. when --j3-subset=N is
+    // given, j3_probes() itself trims down to N random probes.
+    printf("\n%s[6/8] J3 / TSPU active probing%s%s\n", col(C::BOLD), col(C::RST),
+           g_passive ? "  (skipped: --passive)" : "");
+    if (!g_passive)
     for (auto& o: R.open_tcp) {
         if (!is_tls_port(o.port) && o.port != 80 && o.port != 8080) continue;
         printf("  %s-> port :%d%s\n", col(C::BOLD), o.port, col(C::RST));

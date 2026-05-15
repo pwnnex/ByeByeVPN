@@ -17,11 +17,19 @@ extern int  g_threads;
 extern int  g_tcp_to;
 extern int  g_udp_to;
 
-// stealth / privacy opt-outs (default off = full scanner behaviour)
+// stealth / privacy opt-outs (default off = full scanner behaviour).
+// the v2.7.0 stealth pack is about removing scanner-shaped patterns from
+// the wire: shuffle probe order so the 8-J3 sequence isn't a signature,
+// add timing jitter so port-bursts and back-to-back handshakes smear out,
+// and offer probe-set scope cuts.
 extern bool g_stealth;     // master toggle: implies no-geoip + no-ct + udp-jitter
+                           // and turns on inter-probe timing jitter everywhere
 extern bool g_no_geoip;    // skip all 3rd-party GeoIP services
 extern bool g_no_ct;       // skip crt.sh CT lookups
 extern bool g_udp_jitter;  // 50-300ms random delay between UDP probes
+extern int  g_j3_subset;   // 0 = all 8 J3 probes; 1..7 = a random subset of N
+extern bool g_passive;     // minimal-probe mode: skips J3, uTLS dual-probe,
+                           // SNI consistency loop and AmneziaWG sweep entirely
 
 // --save: tee scan output to a file (ANSI stripped)
 extern bool        g_save_requested;

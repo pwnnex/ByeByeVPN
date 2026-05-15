@@ -51,10 +51,16 @@ void help() {
     printf("  -v / --verbose  verbose\n\n");
     printf("Stealth / privacy (opt-outs for 3rd-party-service leakage and\n");
     printf("behavioural-burst fingerprint, default OFF, full scan behaviour):\n");
-    printf("  --stealth       enable --no-geoip + --no-ct + --udp-jitter together\n");
+    printf("  --stealth       enable --no-geoip + --no-ct + --udp-jitter + inter-probe\n");
+    printf("                  timing jitter across J3 / SNI / uTLS / AmneziaWG sweep (v2.7.0)\n");
     printf("  --no-geoip      skip all 3rd-party GeoIP/ASN lookups (target IP stays local)\n");
     printf("  --no-ct         skip crt.sh Certificate Transparency lookup (cert SHA stays local)\n");
-    printf("  --udp-jitter    add 50-300ms random delay between UDP probes (smears port burst)\n\n");
+    printf("  --udp-jitter    add 50-300ms random delay between UDP probes (smears port burst)\n");
+    printf("  --j3-subset N   send a random N-probe subset (1..7) of the eight J3 probes\n");
+    printf("                  per port instead of all eight (v2.7.0)\n");
+    printf("  --passive       minimal-probe mode: SKIPS J3, uTLS dual-probe, SNI consistency\n");
+    printf("                  loop and AmneziaWG S1 sweep entirely. one TLS handshake + GeoIP +\n");
+    printf("                  CT-log only. fewest scanner-shaped patterns on the wire (v2.7.0)\n\n");
     printf("Output:\n");
     printf("  --json           emit a machine-readable JSON report on stdout; the human\n");
     printf("                   scan output is moved to stderr so stdout is pipe-clean\n");

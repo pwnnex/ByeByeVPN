@@ -41,3 +41,29 @@ bool dns_name_match(const std::string& name, const std::string& pat);
 // extract CN= from /C=US/.../CN=foo subject_oneline form.
 std::string extract_cn(const std::string& subject_oneline);
 std::string extract_cn_from_subject(const std::string& subj);
+
+// stealth-mode timing jitter. sleeps a random duration in [min_ms, max_ms]
+// using OpenSSL RAND_bytes for the choice. NO-OP when g_stealth is off.
+// used between probes (J3, SNI consistency, uTLS, AmneziaWG sweep) so
+// scanner-shaped bursts get smeared in time.
+void stealth_sleep_ms(int min_ms, int max_ms);
+
+// CSPRNG-backed Fisher-Yates shuffle for a vector<int> of indices. used by
+// the J3 probe-order randomizer and similar. no std::mt19937, no LCG.
+template <typename T>
+void crypto_shuffle(std::vector<T>& v) {
+    void csprng_bytes(unsigned char* buf, int n);
+    if (v.size() < 2) return;
+    for (size_t i = v.size() - 1; i > 0; --i) {
+        unsigned char r[4];
+        csprng_bytes(r, 4);
+        unsigned long rv = ((unsigned long)r[0] << 24) | ((unsigned long)r[1] << 16) |
+                           ((unsigned long)r[2] << 8) | (unsigned long)r[3];
+        size_t j = (size_t)(rv % (unsigned long)(i + 1));
+        std::swap(v[i], v[j]);
+    }
+}
+
+// expose the CSPRNG byte filler used by crypto_shuffle so the template can
+// stay header-only without dragging in <openssl/rand.h>.
+void csprng_bytes(unsigned char* buf, int n);

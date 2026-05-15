@@ -11,7 +11,7 @@
 | |_) | |_| |  __/ |_) | |_| |  __/\ V / |  __/| |\  |
 |____/ \__, |\___|____/ \__, |\___| \_/  |_|   |_| \_|
        |___/            |___/
-   Full TSPU/DPI/VPN detectability scanner   v2.6.0
+   Full TSPU/DPI/VPN detectability scanner   v2.7.0
 ```
 
 **Languages:** [English](#english) · [Русский](#русский) · [简体中文](README.zh-CN.md) · [فارسی](README.fa.md)
@@ -204,7 +204,7 @@ match appears, and re-runs the grep across the full tree on every tag.
 
 ### Install
 
-Windows: download `byebyevpn-v2.6.0-win64.zip` from
+Windows: download `byebyevpn-v2.7.0-win64.zip` from
 [Releases](../../releases), extract, run `byebyevpn.exe` - either
 double-click for the interactive menu, or pass an IP/hostname from
 the terminal.
@@ -274,14 +274,28 @@ an unreachable v6 silently burns every timeout.
 ### Stealth / privacy
 
 ```
---stealth         --no-geoip + --no-ct + --udp-jitter (all at once)
---no-geoip        skip all 9 IP-intel lookups
+--stealth         --no-geoip + --no-ct + --udp-jitter, AND adds
+                  inter-probe timing jitter across J3 / SNI consistency /
+                  uTLS dual-probe / AmneziaWG sweep (v2.7.0)
+--no-geoip        skip all HTTPS GeoIP lookups
 --no-ct           skip crt.sh CT-log query
 --udp-jitter      50-300ms random delay between UDP probes
+--j3-subset N     send a random N-probe subset (1..7) of the eight J3
+                  probes per port instead of all eight (v2.7.0)
+--passive         minimal-probe mode: SKIPS J3, uTLS dual-probe, SNI
+                  consistency loop and AmneziaWG S1 sweep entirely. one
+                  base TLS handshake + GeoIP + CT-log + traceroute +
+                  SNITCH only. fewest scanner-shaped patterns on the
+                  wire (v2.7.0)
 ```
 
-All default off. Enable when scanning your own VPS and you don't
-want IP-intel services to log the event.
+All default off. Default scan emits the same bytes v2.6.0 emitted.
+
+Anti-fingerprint context: v2.7.0 randomizes the J3 probe order with a
+CSPRNG-backed Fisher-Yates per scan, so the fixed `empty -> GET ->
+CONNECT -> SSH -> rand -> tls-invalid -> abs-URI -> 0xff` sequence is
+no longer on the wire. The Chrome 131 ClientHello randomness also moved
+to `RAND_bytes` (away from `std::mt19937`).
 
 ### Save scan output
 
@@ -494,7 +508,7 @@ CI workflow (`.github/workflows/release.yml`) проваливает сборк�
 
 ### Установка
 
-Windows: скачать `byebyevpn-v2.6.0-win64.zip` со страницы
+Windows: скачать `byebyevpn-v2.7.0-win64.zip` со страницы
 [Releases](../../releases), распаковать, запустить `byebyevpn.exe`
 (двойной клик = интерактивное меню, либо IP/hostname из терминала).
 
@@ -562,14 +576,28 @@ Hostname резолвится через `getaddrinfo`; IPv4 выбираетс�
 ### Stealth / приватность
 
 ```
---stealth         --no-geoip + --no-ct + --udp-jitter одновременно
---no-geoip        не дёргать 9 IP-intel сервисов
+--stealth         --no-geoip + --no-ct + --udp-jitter, и плюс
+                  inter-probe timing jitter по J3 / SNI consistency /
+                  uTLS dual-probe / AmneziaWG sweep (v2.7.0)
+--no-geoip        не дёргать HTTPS GeoIP-провайдеров
 --no-ct           не дёргать crt.sh
 --udp-jitter      50-300ms случайная задержка между UDP probe'ами
+--j3-subset N     отправить N (1..7) случайных проб из восьми J3 на порт
+                  вместо всех восьми (v2.7.0)
+--passive         минимальный профиль: ПРОПУСКАЕТ J3, uTLS dual-probe,
+                  SNI consistency и AmneziaWG sweep целиком. только
+                  один TLS handshake + GeoIP + CT + traceroute + SNITCH.
+                  меньше всего scanner-образных паттернов на проводе
+                  (v2.7.0)
 ```
 
-Все по умолчанию OFF. Включать при сканировании своего VPS, если
-не хотите чтобы сторонние сервисы логировали событие.
+Все по умолчанию OFF. Дефолтный скан шлёт ровно то же что v2.6.0.
+
+Анти-фингерпринт контекст: v2.7.0 рандомизирует порядок J3-проб через
+CSPRNG-Fisher-Yates per scan, фиксированной последовательности `empty
+-> GET -> CONNECT -> SSH -> rand -> tls-invalid -> abs-URI -> 0xff` на
+проводе больше нет. Рандом в Chrome 131 ClientHello тоже переехал на
+`RAND_bytes` (с `std::mt19937`).
 
 ### Сохранение результата в файл
 

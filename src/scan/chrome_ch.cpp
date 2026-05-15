@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "chrome_ch.h"
 
-#include <random>
+#include <openssl/rand.h>
 
 using std::string;
 using std::vector;
@@ -10,12 +10,25 @@ namespace {
 
 // the 16 RFC 8701 GREASE values. Chrome picks one per slot, not necessarily
 // the same one in every slot, so we draw fresh each time.
-uint16_t grease_value(std::mt19937& rng) {
-    static const uint16_t G[16] = {
-        0x0a0a, 0x1a1a, 0x2a2a, 0x3a3a, 0x4a4a, 0x5a5a, 0x6a6a, 0x7a7a,
-        0x8a8a, 0x9a9a, 0xaaaa, 0xbaba, 0xcaca, 0xdada, 0xeaea, 0xfafa
-    };
-    return G[rng() & 0x0f];
+const uint16_t GREASE[16] = {
+    0x0a0a, 0x1a1a, 0x2a2a, 0x3a3a, 0x4a4a, 0x5a5a, 0x6a6a, 0x7a7a,
+    0x8a8a, 0x9a9a, 0xaaaa, 0xbaba, 0xcaca, 0xdada, 0xeaea, 0xfafa
+};
+
+// CSPRNG-backed RNG. all randomness here goes through OpenSSL RAND_bytes so
+// the ClientHello carries no observable PRNG pattern. RAND_bytes return is
+// not checked: on a system where OpenSSL's RNG cannot seed at all, falling
+// back to zeros still produces a syntactically valid ClientHello (the bytes
+// in question are random-looking fields the peer does not validate against
+// us; we are not running the TLS 1.3 key schedule on this path).
+uint8_t rand_u8() {
+    uint8_t b = 0;
+    RAND_bytes(&b, 1);
+    return b;
+}
+
+uint16_t grease_value() {
+    return GREASE[rand_u8() & 0x0f];
 }
 
 // append-only byte builder with length-prefix backpatching.
@@ -49,9 +62,7 @@ void ext(B& b, uint16_t type, Fn&& body) {
 } // namespace
 
 std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
-    std::random_device rd;
-    std::mt19937 rng(rd());
-    auto rbyte = [&]{ return (uint8_t)(rng() & 0xff); };
+    auto rbyte = []{ return rand_u8(); };
 
     // GREASE values, drawn once up front. two constraints, both enforced by
     // a strict server (OpenSSL rejects violations):
@@ -62,12 +73,12 @@ std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
     //   * the two bookend extension types MUST differ from each other, or it
     //     is a duplicate extension type.
     // the cipher-list and supported_versions GREASE values are unconstrained.
-    const uint16_t g_cipher = grease_value(rng);
-    const uint16_t g_group  = grease_value(rng);   // supported_groups + key_share
-    const uint16_t g_ver    = grease_value(rng);
-    const uint16_t g_ext1   = grease_value(rng);
-    uint16_t g_ext2 = grease_value(rng);
-    while (g_ext2 == g_ext1) g_ext2 = grease_value(rng);
+    const uint16_t g_cipher = grease_value();
+    const uint16_t g_group  = grease_value();   // supported_groups + key_share
+    const uint16_t g_ver    = grease_value();
+    const uint16_t g_ext1   = grease_value();
+    uint16_t g_ext2 = grease_value();
+    while (g_ext2 == g_ext1) g_ext2 = grease_value();
 
     // ---- extensions block, built standalone so the padding extension can
     //      be sized against the finished pre-pad ClientHello length --------

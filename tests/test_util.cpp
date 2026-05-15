@@ -116,3 +116,29 @@ TEST_CASE("mac_to_str formats colon-separated hex") {
     unsigned char mac[] = {0x08, 0x00, 0x27, 0x4e, 0xd3, 0x7f};
     CHECK(mac_to_str(mac, 6) == "08:00:27:4E:D3:7F");
 }
+
+#include <algorithm>
+
+TEST_CASE("crypto_shuffle is a permutation of its input (no loss, no dups)") {
+    // the J3 probe-order randomizer rides on this; verify the basics. it
+    // would be hostile to assert specific orderings (the whole point is
+    // randomness), but every element of the input must appear exactly once
+    // in the output, otherwise probes go missing or get doubled.
+    for (int trial = 0; trial < 32; ++trial) {
+        std::vector<int> v = {0, 1, 2, 3, 4, 5, 6, 7};
+        std::vector<int> original = v;
+        crypto_shuffle(v);
+        REQUIRE(v.size() == original.size());
+        std::vector<int> sorted_v = v;
+        std::sort(sorted_v.begin(), sorted_v.end());
+        CHECK(sorted_v == original);
+    }
+    // empty + single-element inputs are no-ops, not crashes.
+    std::vector<int> empty;
+    crypto_shuffle(empty);
+    CHECK(empty.empty());
+    std::vector<int> one = {42};
+    crypto_shuffle(one);
+    REQUIRE(one.size() == 1);
+    CHECK(one[0] == 42);
+}

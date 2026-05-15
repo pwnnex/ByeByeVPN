@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "amnezia_probe.h"
 #include "../net/udp.h"
+#include "../common/util.h"
 
 #include <openssl/rand.h>
 
@@ -35,6 +36,10 @@ constexpr int S1_SWEEP_N = (int)(sizeof(S1_SWEEP) / sizeof(S1_SWEEP[0]));
 AmneziaSweep amnezia_deep_probe(const string& host, int port) {
     AmneziaSweep r;
     for (int i = 0; i < S1_SWEEP_N; ++i) {
+        // a 12-datagram sweep on the same WG port is the most obvious
+        // AmneziaWG-detector pattern. under --stealth, jitter 150-900ms
+        // between datagrams to smear it. NO-OP without --stealth.
+        if (i > 0) stealth_sleep_ms(150, 900);
         int s1 = S1_SWEEP[i];
         vector<unsigned char> pkt = build_s1_packet(s1);
         UdpResult u = udp_probe(host, port, pkt.data(), (int)pkt.size(), 1200);

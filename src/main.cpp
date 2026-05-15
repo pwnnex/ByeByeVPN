@@ -62,6 +62,11 @@ int main(int argc, char** argv) {
         else if (a == "--no-geoip")   g_no_geoip = true;
         else if (a == "--no-ct")      g_no_ct = true;
         else if (a == "--udp-jitter") g_udp_jitter = true;
+        else if (a == "--passive")    g_passive = true;
+        else if (a == "--j3-subset" && i + 1 < argc) {
+            int n = std::atoi(argv[++i]);
+            if (n > 0 && n < 8) g_j3_subset = n;
+        }
         else if (a == "--json")       g_json = true;
         else if (a == "--save") {
             g_save_requested = true;
@@ -141,7 +146,7 @@ int main(int argc, char** argv) {
                                  lt->tm_hour, lt->tm_min, lt->tm_sec);
             if (!pos.empty())
                 std::fprintf(g_save_fp, "**Target:** `%s`  \n", pos.back().c_str());
-            std::fprintf(g_save_fp, "**Scanner version:** v2.6.0  \n\n");
+            std::fprintf(g_save_fp, "**Scanner version:** v2.7.0  \n\n");
             std::fprintf(g_save_fp, "```\n");
         }
     }

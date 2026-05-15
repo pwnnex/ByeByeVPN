@@ -45,7 +45,13 @@ SniConsistency sni_consistency(const string& ip, int port, const string& base_sn
     int same = 0, total = 0;
     std::set<string> distinct;
     if (!base.cert_sha256.empty()) distinct.insert(base.cert_sha256);
+    bool first = true;
     for (auto& s: alt) {
+        // back-to-back TLS handshakes with rotating SNIs to one port from
+        // one source is a distinctive scanner pattern. under --stealth,
+        // smear them 200-1200ms apart. NO-OP without --stealth.
+        if (!first) stealth_sleep_ms(200, 1200);
+        first = false;
         TlsProbe p = tls_probe(ip, port, s);
         SniConsistency::Entry e;
         e.sni = s;

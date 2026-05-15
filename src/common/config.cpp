@@ -11,6 +11,8 @@ bool g_stealth    = false;
 bool g_no_geoip   = false;
 bool g_no_ct      = false;
 bool g_udp_jitter = false;
+int  g_j3_subset  = 0;
+bool g_passive    = false;
 
 bool        g_save_requested = false;
 FILE*       g_save_fp        = nullptr;

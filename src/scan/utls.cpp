@@ -293,6 +293,9 @@ UtlsProbeResult utls_probe_openssl(const string& ip, int port, const string& sni
 UtlsDualProbe utls_dual_probe(const string& ip, int port, const string& sni) {
     UtlsDualProbe d;
     d.chrome  = utls_probe_chrome (ip, port, sni);
+    // chrome immediately followed by openssl to the same port is itself a
+    // scanner-shaped pair. under --stealth, separate them 300-1500ms.
+    stealth_sleep_ms(300, 1500);
     d.openssl = utls_probe_openssl(ip, port, sni);
     d.both_completed = d.chrome.handshake_completed && d.openssl.handshake_completed;
 

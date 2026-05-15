@@ -7,6 +7,7 @@
 
 #include <openssl/rand.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <vector>
@@ -14,8 +15,26 @@
 using std::string;
 using std::vector;
 
-static J3Result j3_send(const string& host, int port, const string& name,
-                        const void* data, int dlen, bool close_after_send = false) {
+namespace {
+
+// probe identifiers. the order in this enum is the order they were sent in
+// pre-v2.7.0; that fixed order itself was a tool fingerprint. since v2.7.0
+// j3_probes() shuffles them per scan and may keep only a subset, so the
+// scanner-shaped 8-in-fixed-order signature no longer goes on the wire.
+enum ProbeKind {
+    P_EMPTY,
+    P_HTTP_GET,
+    P_HTTP_CONNECT,
+    P_SSH_BANNER,
+    P_RANDOM_512,
+    P_TLS_INVALID_SNI,
+    P_HTTP_ABSURI,
+    P_FF128,
+    P_COUNT
+};
+
+J3Result send_simple(const string& host, int port, const string& name,
+                     const void* data, int dlen, bool close_after_send = false) {
     J3Result r; r.name = name;
     auto t0 = std::chrono::steady_clock::now();
     string err; SOCKET s = tcp_connect(host, port, g_tcp_to, err);
@@ -36,11 +55,9 @@ static J3Result j3_send(const string& host, int port, const string& name,
     return r;
 }
 
-vector<J3Result> j3_probes(const string& host, int port) {
-    vector<J3Result> out;
-
-    // 1) empty payload — just close after connect
-    {
+J3Result run_one(ProbeKind kind, const string& host, int port) {
+    switch (kind) {
+    case P_EMPTY: {
         string err; SOCKET s = tcp_connect(host, port, g_tcp_to, err);
         J3Result r; r.name = "empty/close";
         if (s != INVALID_SOCKET) {
@@ -52,30 +69,26 @@ vector<J3Result> j3_probes(const string& host, int port) {
             }
             closesocket(s);
         }
-        out.push_back(r);
+        return r;
     }
-    // 2) HTTP GET / with the real Host header (so a real web server can route).
-    {
-        string req = "GET / HTTP/1.1\r\nHost: " + host + "\r\nUser-Agent: curl/8.4.0\r\nAccept: */*\r\n\r\n";
-        out.push_back(j3_send(host, port, "HTTP GET /", req.data(), (int)req.size()));
+    case P_HTTP_GET: {
+        string req = "GET / HTTP/1.1\r\nHost: " + host
+                   + "\r\nUser-Agent: curl/8.4.0\r\nAccept: */*\r\n\r\n";
+        return send_simple(host, port, "HTTP GET /", req.data(), (int)req.size());
     }
-    // 3) CONNECT proxy-style
-    {
+    case P_HTTP_CONNECT: {
         string req = "CONNECT 1.2.3.4:443 HTTP/1.1\r\nHost: 1.2.3.4\r\n\r\n";
-        out.push_back(j3_send(host, port, "HTTP CONNECT", req.data(), (int)req.size()));
+        return send_simple(host, port, "HTTP CONNECT", req.data(), (int)req.size());
     }
-    // 4) realistic OpenSSH banner — DPI sees a normal SSH attempt
-    {
+    case P_SSH_BANNER: {
         string req = "SSH-2.0-OpenSSH_8.9p1\r\n";
-        out.push_back(j3_send(host, port, "SSH banner", req.data(), (int)req.size()));
+        return send_simple(host, port, "SSH banner", req.data(), (int)req.size());
     }
-    // 5) 512 random bytes via CSPRNG (no LCG/seed pattern)
-    {
+    case P_RANDOM_512: {
         unsigned char buf[512]; RAND_bytes(buf, 512);
-        out.push_back(j3_send(host, port, "random 512B", buf, 512));
+        return send_simple(host, port, "random 512B", buf, 512);
     }
-    // 6) TLS ClientHello minimal (TLS 1.0 record, randomized .invalid SNI)
-    {
+    case P_TLS_INVALID_SNI: {
         unsigned char hello[] = {
             0x16,0x03,0x01,0x00,0x70,
             0x01,0x00,0x00,0x6c,
@@ -97,9 +110,7 @@ vector<J3Result> j3_probes(const string& host, int port) {
             0x00,0x2b,0x00,0x03, 0x02,0x03,0x04,
             0x00,0x33,0x00,0x02, 0x00,0x00
         };
-        // ClientRandom at offset 11 (TLS 1.2 version bytes)
         RAND_bytes(hello + 11, 32);
-        // randomize the 3-byte SNI prefix in front of ".invalid"
         for (size_t i = 11 + 32; i + 11 <= sizeof(hello); ++i) {
             if (hello[i]   == '.' && hello[i+1] == 'i' && hello[i+2] == 'n' &&
                 hello[i+3] == 'v' && hello[i+4] == 'a' && hello[i+5] == 'l' &&
@@ -111,17 +122,47 @@ vector<J3Result> j3_probes(const string& host, int port) {
                 break;
             }
         }
-        out.push_back(j3_send(host, port, "TLS CH invalid-SNI", hello, (int)sizeof(hello)));
+        return send_simple(host, port, "TLS CH invalid-SNI", hello, (int)sizeof(hello));
     }
-    // 7) HTTP/1.1 abs-URI (proxy-style GET with full URL)
-    {
+    case P_HTTP_ABSURI: {
         string req = "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n";
-        out.push_back(j3_send(host, port, "HTTP abs-URI (proxy-style)", req.data(), (int)req.size()));
+        return send_simple(host, port, "HTTP abs-URI (proxy-style)",
+                           req.data(), (int)req.size());
     }
-    // 8) 0xFF x 128 trash
-    {
+    case P_FF128: {
         unsigned char garb[128]; std::memset(garb, 0xFF, sizeof(garb));
-        out.push_back(j3_send(host, port, "0xFF x128", garb, sizeof(garb)));
+        return send_simple(host, port, "0xFF x128", garb, sizeof(garb));
+    }
+    default: return J3Result{};
+    }
+}
+
+} // namespace
+
+vector<J3Result> j3_probes(const string& host, int port) {
+    // build the full kind list then shuffle with a CSPRNG so the on-wire
+    // probe ORDER is randomized per scan. before v2.7.0 these eight probes
+    // always went out in the same order; that ordering was itself the most
+    // distinctive byebyevpn fingerprint at the network layer.
+    vector<int> kinds;
+    kinds.reserve(P_COUNT);
+    for (int i = 0; i < P_COUNT; ++i) kinds.push_back(i);
+    crypto_shuffle(kinds);
+
+    // optional scope cut: take only N out of the eight. --j3-subset=4 cuts
+    // the count in half so the per-port pattern is even less identifiable.
+    if (g_j3_subset > 0 && g_j3_subset < (int)kinds.size()) {
+        kinds.resize((size_t)g_j3_subset);
+    }
+
+    vector<J3Result> out;
+    out.reserve(kinds.size());
+    for (size_t i = 0; i < kinds.size(); ++i) {
+        // inter-probe timing jitter under --stealth: 250-1500ms between
+        // probes so the burst doesn't smell like an automated scan. NO-OP
+        // when stealth is off.
+        if (i > 0) stealth_sleep_ms(250, 1500);
+        out.push_back(run_one((ProbeKind)kinds[i], host, port));
     }
     return out;
 }

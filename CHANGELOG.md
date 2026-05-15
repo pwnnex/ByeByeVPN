@@ -1,5 +1,99 @@
 # Changelog
 
+## v2.7.0 - 2026-05-15
+
+an anti-fingerprint release. the v2.6.0 detection features ship the
+same as before; what changes is what the scanner LOOKS LIKE on the
+wire. probe order is randomized, inter-probe timing jitter lands under
+`--stealth`, two new scope-cut flags let the operator narrow the probe
+surface, and the Chrome 131 ClientHello randomness now comes from a
+CSPRNG instead of `std::mt19937`. nothing on the wire changes by
+default — every behavioural change is opt-in. detection capability is
+unchanged.
+
+### why this matters
+
+the scanner emits no tool-identifying strings on the wire (CI gates on
+the `grep` audit; v2.6.0 already passes at 1/3). what it DID emit was
+behavioural patterns:
+
+- eight J3 probes per TLS port in a fixed order
+- chrome-flavored TLS handshake immediately followed by an
+  openssl-flavored one, to the same port
+- ten sequential TLS handshakes with rotating SNIs in the SNI
+  consistency loop
+- a twelve-datagram AmneziaWG S1 sweep on a single UDP port
+
+each of those is a recognisable scanner shape. v2.7.0 takes them apart.
+
+### new: probe-order randomization (`src/scan/j3.cpp`)
+
+the eight J3 probes are now shuffled per scan with a CSPRNG-backed
+Fisher-Yates (`crypto_shuffle` in `src/common/util.h`). the per-port
+sequence is different every run, so a defender cannot fingerprint a
+fixed `empty -> GET -> CONNECT -> SSH -> rand -> tls-invalid -> abs-URI
+-> 0xff` order anymore. the J3 implementation was moved to an enum-tagged
+dispatcher, which made the shuffle a one-liner.
+
+### new: `--stealth` becomes real
+
+before v2.7.0 `--stealth` only set the existing `--no-geoip` +
+`--no-ct` + `--udp-jitter` triplet. it now also applies inter-probe
+timing jitter across every multi-probe phase:
+
+- 250-1500 ms between J3 probes
+- 200-1200 ms between SNI consistency handshakes
+- 300-1500 ms between the chrome and openssl uTLS dual-probe halves
+- 150-900 ms between AmneziaWG S1 sweep datagrams
+
+a new helper `stealth_sleep_ms(min, max)` in `src/common/util.cpp`
+picks the delay from `RAND_bytes` and is a NO-OP when `--stealth` is
+off. scans take longer in stealth mode (an order of seconds per port
+extra), but the burst patterns smear into background-noise timing.
+
+### new: `--j3-subset N`
+
+run a random N of the eight J3 probes per port instead of all eight,
+where 1 <= N <= 7. combined with the shuffle, the per-port pattern is
+much smaller and the probability of two scans sending the same order +
+subset is `1 / (P(8,N))` (~few thousand for N=4). drops the canned-J3
+signature flat.
+
+### new: `--passive` mode
+
+minimal-probe profile. SKIPS the J3 phase entirely, the uTLS dual-probe,
+the SNI consistency loop and the AmneziaWG S1 sweep. one base TLS
+handshake + GeoIP + CT lookup + traceroute + SNITCH only. the scan
+output marks each skipped phase explicitly. fewest scanner-shaped
+patterns the tool can emit while still scoring.
+
+### chore: Chrome 131 ClientHello uses CSPRNG
+
+the random ClientRandom, legacy session_id and x25519 key_share private
+in `src/scan/chrome_ch.cpp` now come from `RAND_bytes` instead of
+`std::random_device` + `std::mt19937`. functionally a no-op (the raw
+chrome path does not run the TLS 1.3 key schedule, so the predictability
+of mt19937 never had a security consequence), but the consistency story
+is cleaner: every random byte the tool emits is CSPRNG-sourced.
+
+### what stays the same
+
+- detection capability — every v2.6.0 signal works exactly as before
+- the default-off posture — without any new flag, scan behaviour is
+  bit-for-bit what v2.6.0 emitted
+- `--json`, exit codes, SBOM, minisign signing flow
+
+### deferred to v2.7.x
+
+- byte-accurate Chrome 131 with `encrypted_client_hello` (0xfe0d) and
+  `X25519MLKEM768` keyshare. the JA4 already matches a real recent
+  Chrome (`t13d1516h2`) and our hello is accepted in practice; ECH +
+  PQ is a fidelity polish for very strict uTLS-enforcing servers
+- JA4-Q (QUIC fingerprint) for Hysteria2
+- multi-flavour dual-probe (Firefox, Safari) in addition to Chrome
+- TLS 1.3 key schedule on the raw chrome path to recover the encrypted
+  certificate
+
 ## v2.6.0 - 2026-05-14
 
 a focus release. the scope is narrowed to the modern signature-less

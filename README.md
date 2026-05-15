@@ -1,5 +1,3 @@
-**📢 Important news about development:** https://github.com/pwnnex/ByeByeVPN/issues/9
-
 # ByeByeVPN
 
 Клиентский сканер детектируемости VPN / DPI / Reality / ТСПУ. Одна

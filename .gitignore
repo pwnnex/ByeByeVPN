@@ -56,3 +56,4 @@ Thumbs.db
 *.exp
 *.zip
 dist/
+dist-release/

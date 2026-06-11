@@ -1095,11 +1095,18 @@ FullReport run_full_target(const string& target) {
                  " hops, max RTT step " + std::to_string(trc.max_rtt_jump_ms) +
                  "ms — path looks clean");
         if (trc.tspu_hops > 0) {
-            flag_minor("traceroute goes through " + std::to_string(trc.tspu_hops) +
-                       " hop(s) matching the tspu management-subnet layout "
-                       "(10.X.Y.[131-235]/[241-245]/254) - indicates a tspu site "
-                       "is between you and the target",
-                       5 * trc.tspu_hops);
+            // INFORMATIONAL ONLY, no score impact (v2.8.1). earlier versions
+            // penalised "10.X.Y.[131-235]/[241-245]/254" hops as a "tspu
+            // management subnet" on the path. that was wrong: TSPU is a
+            // bump-in-the-wire DPI box, transparent at L3 — it does not touch
+            // TTL and does not appear as its own traceroute hop. 10.x hops are
+            // just ordinary operator link addressing. so we no longer score
+            // this; we only note it honestly.
+            note("private-hops",
+                 std::to_string(trc.tspu_hops) + " private 10.x hop(s) on the path "
+                 "(operator link addressing). NOT a TSPU signal: TSPU is bump-in-the-"
+                 "wire / L3-transparent and never shows up as its own traceroute hop. "
+                 "informational only, no score impact.");
         }
     }
 
@@ -1975,9 +1982,11 @@ FullReport run_full_target(const string& target) {
         rules.push_back({"Multi-source VPN/proxy tag",  (vpn_hits >= 2 || proxy_hits >= 2),
                          "≥2 GeoIP providers tag the IP as VPN/proxy"});
         rules.push_back({"Tor exit relay",              (tor_hits >= 1), "At least 1 GeoIP provider tags the IP as Tor exit"});
-        bool tspu_hops_hit = (R.trace && R.trace->ok && R.trace->tspu_hops > 0);
-        rules.push_back({"TSPU mgmt-subnet in traceroute", tspu_hops_hit,
-                         "hop(s) in 10.X.Y.[131-235]/[241-245]/254 range - tspu site on path"});
+        // v2.8.1: the "TSPU mgmt-subnet in traceroute" rule was removed. TSPU
+        // is bump-in-the-wire and L3-transparent, so it never appears as its
+        // own traceroute hop; 10.x hops are ordinary operator addressing.
+        // private-10.x hops are now reported as an informational note only and
+        // do NOT contribute to the TSPU verdict.
         rules.push_back({"NaiveProxy / forward-proxy",   !naive_ports.empty(),
                          "407 Proxy-Authenticate to a proxy-style request over TLS"});
         rules.push_back({"VLESS/VMess-WebSocket",        (!ws_ports.empty() && sparse_vps_profile),

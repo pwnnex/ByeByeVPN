@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.8.1 - 2026-06-11
+
+a correctness patch.
+
+### fix: traceroute "TSPU mgmt-subnet" detection removed from the verdict
+
+earlier versions penalised the score (and raised a TSPU-verdict B-tier hit)
+when a traceroute hop fell in `10.X.Y.[131-235]/[241-245]/254`, calling it a
+"TSPU management subnet on the path". that is wrong, and a reporter on
+ntc.party (issue thread) was right to call it out:
+
+- TSPU is a bump-in-the-wire DPI box. it is **transparent at L3**: it does not
+  decrement TTL and does not appear as its own hop in a traceroute, so you
+  cannot detect it by trace at all.
+- `10.x` hops are just ordinary operator link addressing, present in tons of
+  normal paths, and mean nothing about TSPU.
+
+so the score penalty and the `TSPU mgmt-subnet in traceroute` verdict rule are
+**both removed**. private-10.x hops are now an honest informational note only
+(no score impact, no TSPU-tier impact). the `tspu_hops` count is still emitted
+in `--json` for reference.
+
 ## v2.8.0 - 2026-06-01
 
 a proactive release. every prior version answered "is this *deployed*

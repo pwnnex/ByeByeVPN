@@ -94,7 +94,7 @@ static: $(OBJ)
 # -----------------------------------------------------------------
 # release zip
 # -----------------------------------------------------------------
-VERSION ?= v2.8.0
+VERSION ?= v2.8.1
 ZIP_NAME = $(BIN)-$(VERSION)-win64.zip
 
 release-zip: windows-static

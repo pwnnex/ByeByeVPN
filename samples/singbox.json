@@ -1,0 +1,19 @@
+{
+  "inbounds": [
+    { "type": "hysteria2", "listen_port": 443 },
+    {
+      "type": "vless",
+      "listen_port": 2087,
+      "users": [{ "uuid": "00000000-0000-0000-0000-000000000000", "flow": "xtls-rprx-vision" }],
+      "tls": {
+        "enabled": true,
+        "server_name": "www.apple.com",
+        "reality": {
+          "enabled": true,
+          "handshake": { "server": "www.apple.com", "server_port": 443 },
+          "short_id": ["00aabb"]
+        }
+      }
+    }
+  ]
+}

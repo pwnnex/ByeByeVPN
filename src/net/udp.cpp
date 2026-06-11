@@ -52,6 +52,8 @@ UdpResult udp_probe(const string& host, int port,
     if (got > 0) {
         r.responded = true; r.bytes = got;
         r.reply_hex = hex_s((unsigned char*)buf, std::min(32, got), true);
+        int keep = std::min(got, 256);
+        r.reply.assign((unsigned char*)buf, (unsigned char*)buf + keep);
     } else if (werr == WSAETIMEDOUT || werr == 0) {
         r.err = "no-reply / filtered";
     } else if (werr == WSAECONNRESET) {

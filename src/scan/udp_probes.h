@@ -19,4 +19,9 @@
 
 UdpResult wireguard_probe (const std::string& host, int port);   // 148B handshake init
 UdpResult amneziawg_probe (const std::string& host, int port);   // WG with Sx=8 junk prefix
-UdpResult hysteria2_probe (const std::string& host, int port);   // QUIC v1 Initial, random DCID
+UdpResult hysteria2_probe (const std::string& host, int port);   // real protected QUIC v1 Initial
+UdpResult hysteria2_vn_probe(const std::string& host, int port); // forces Version-Negotiation
+
+// classify a QUIC reply (e.g. from hysteria2_probe / hysteria2_vn_probe).
+// returns "" when the reply does not look like a QUIC packet.
+std::string quic_reply_summary(const UdpResult& u);

@@ -11,6 +11,7 @@
 #include <openssl/rand.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 using std::string;
@@ -123,9 +124,23 @@ FpResult fp_http_connect(const string& host, int port) {
     buf[n] = 0;
     string line(buf, buf + std::min(n, 120));
     if (starts_with(line, "HTTP/")) {
-        f.service = "HTTP-PROXY";
-        f.details = trim(line.substr(0, line.find('\n')));
-        f.is_vpn_like = true;
+        string first = trim(line.substr(0, line.find('\n')));
+        // an OPEN proxy answers CONNECT with 2xx ("200 Connection
+        // established"). a normal web server rejects the CONNECT verb with
+        // 4xx/5xx, or redirects 3xx — that is NOT an open proxy, so don't
+        // flag it as vpn-like (this was a false positive on e.g. envoy/nginx
+        // edges that 404 the CONNECT).
+        int code = 0;
+        size_t sp = first.find(' ');
+        if (sp != string::npos) code = std::atoi(first.c_str() + sp + 1);
+        if (code >= 200 && code < 300) {
+            f.service = "HTTP-PROXY";
+            f.details = first;
+            f.is_vpn_like = true;
+        } else {
+            f.service = "HTTP";
+            f.details = "rejected CONNECT (" + first + ") — not an open proxy";
+        }
     } else {
         f.details = printable_prefix(line);
     }

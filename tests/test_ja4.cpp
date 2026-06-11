@@ -162,16 +162,29 @@ TEST_CASE("parse_server_hello + ja4s_server") {
 }
 
 TEST_CASE("ja4s_classify: exact seed hit vs structural fallback") {
-    // exact: the Cloudflare-edge ext-hash seeded in ja4s_db.cpp
+    // exact: the universal TLS 1.3 ServerHello ext-hash (corrected from the
+    // old "cloudflare-edge" mislabel — proven non-distinctive across
+    // Cloudflare/GitHub/Caddy/Microsoft, so it names no specific stack).
     Ja4sInfo cf = ja4s_classify("t130200_1301_a56c5b993250");
     CHECK(cf.confidence == "exact");
-    CHECK(cf.family == "cloudflare-edge");
+    CHECK(cf.family == "tls13-generic-serverhello");
 
-    // structural: unknown ext-hash, valid shape -> generic family
+    // exact: the observed TLS 1.2 OpenSSL/nginx-family ext-hash.
+    Ja4sInfo ng = ja4s_classify("t1206h2_c030_c0bc851e483b");
+    CHECK(ng.confidence == "exact");
+    CHECK(ng.family == "tls12-openssl-family");
+
+    // structural: unknown ext-hash, valid TLS 1.3 shape -> generic family
     Ja4sInfo st = ja4s_classify("t130203h2_1302_ffffffffffff");
     CHECK(st.confidence == "structural");
     CHECK(st.tls_version == 0x0304);
     CHECK(st.ok);
+
+    // structural: a multi-ext TLS 1.2 ServerHello -> openssl-family band
+    Ja4sInfo t12 = ja4s_classify("t1206h2_c030_aaaaaaaaaaaa");
+    CHECK(t12.confidence == "structural");
+    CHECK(t12.tls_version == 0x0303);
+    CHECK(t12.family == "tls12-multi-ext");
 
     // malformed input -> unknown, never crashes
     Ja4sInfo bad = ja4s_classify("not-a-ja4s");

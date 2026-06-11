@@ -12,6 +12,7 @@ SRC := \
     src/common/console.cpp \
     src/common/util.cpp \
     src/common/tspu.cpp \
+    src/common/json.cpp \
     src/net/dns.cpp \
     src/net/tcp.cpp \
     src/net/udp.cpp \
@@ -36,10 +37,16 @@ SRC := \
     src/scan/tcpfp.cpp \
     src/scan/ja4s_db.cpp \
     src/scan/amnezia_probe.cpp \
+    src/scan/quic.cpp \
+    src/scan/grpc.cpp \
+    src/scan/transport_probe.cpp \
     src/local/local.cpp \
     src/app/target.cpp \
     src/app/orchestrator.cpp \
     src/app/json_report.cpp \
+    src/app/config_audit.cpp \
+    src/app/sweep_core.cpp \
+    src/app/sweep.cpp \
     src/app/cli.cpp
 
 OBJ := $(SRC:.cpp=.o)
@@ -87,7 +94,7 @@ static: $(OBJ)
 # -----------------------------------------------------------------
 # release zip
 # -----------------------------------------------------------------
-VERSION ?= v2.7.0
+VERSION ?= v2.8.0
 ZIP_NAME = $(BIN)-$(VERSION)-win64.zip
 
 release-zip: windows-static
@@ -113,13 +120,21 @@ TEST_SRC := \
     tests/test_tspu.cpp \
     tests/test_ports.cpp \
     tests/test_brand.cpp \
+    tests/test_json.cpp \
+    tests/test_config_audit.cpp \
+    tests/test_quic.cpp \
+    tests/test_sweep.cpp \
     src/common/util.cpp \
     src/common/tspu.cpp \
+    src/common/json.cpp \
     src/scan/ja4.cpp \
     src/scan/chrome_ch.cpp \
     src/scan/ja4s_db.cpp \
     src/scan/brand.cpp \
     src/scan/ports.cpp \
+    src/scan/quic.cpp \
+    src/app/config_audit.cpp \
+    src/app/sweep_core.cpp \
     src/common/config.cpp
 
 test: $(TEST_SRC)

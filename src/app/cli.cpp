@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "cli.h"
 #include "orchestrator.h"
+#include "config_audit.h"
 #include "target.h"
 #include "../common/console.h"
 #include "../common/config.h"
@@ -24,6 +25,77 @@
 
 using std::string;
 
+static string read_whole_file(const string& path, bool& ok) {
+    ok = false;
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return {};
+    string out;
+    char buf[8192];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
+    std::fclose(f);
+    ok = true;
+    return out;
+}
+
+int run_config_audit(const string& path) {
+    bool ok = false;
+    string text = read_whole_file(path, ok);
+    if (!ok) {
+        printf("%scannot open config file '%s'%s\n",
+               col(C::RED), path.c_str(), col(C::RST));
+        return 64;
+    }
+    ConfigAudit a = audit_config_text(text);
+    if (g_json) {
+        // machine-readable: emit the JSON object and exit with the tier code.
+        std::fputs(config_audit_to_json(a).c_str(), stdout);
+        if (!a.ok)                                  return 64;
+        if (a.tspu_tier.rfind("PASS", 0) == 0)      return 0;
+        if (a.tspu_tier.rfind("THROTTLE", 0) == 0)  return 1;
+        if (a.tspu_tier.rfind("BLOCK", 0) == 0)     return 2;
+        return 3;
+    }
+    printf("\n%s== Config audit: %s ==%s\n", col(C::BOLD), path.c_str(), col(C::RST));
+    if (!a.ok) {
+        printf("  %serror: %s%s\n", col(C::RED), a.err.c_str(), col(C::RST));
+        return 64;
+    }
+    printf("  format: %s%s%s   inbounds: %d\n",
+           col(C::CYN), a.format.c_str(), col(C::RST), a.inbound_count);
+    if (a.findings.empty())
+        printf("  %sno detectability tells found in the config%s\n",
+               col(C::GRN), col(C::RST));
+    for (auto& f : a.findings) {
+        const char* sc;
+        const char* tag;
+        switch (f.sev) {
+            case AuditFinding::Sev::High:   sc = col(C::RED); tag = "[!] HIGH"; break;
+            case AuditFinding::Sev::Medium: sc = col(C::YEL); tag = "[-] MED "; break;
+            default:                        sc = col(C::CYN); tag = "[i] INFO"; break;
+        }
+        printf("  %s%s%s %s%-22s%s %s%s%s%s\n",
+               sc, tag, col(C::RST),
+               col(C::BOLD), f.tag.c_str(), col(C::RST),
+               col(C::DIM), f.where.c_str(), col(C::RST),
+               f.named ? "  [named-protocol]" : "");
+        printf("       %s\n", f.title.c_str());
+        printf("       %sfix:%s %s\n", col(C::GRN), col(C::RST), f.fix.c_str());
+    }
+    const char* tc = (a.tspu_tier.rfind("PASS", 0) == 0)     ? col(C::GRN)
+                   : (a.tspu_tier.rfind("THROTTLE", 0) == 0) ? col(C::YEL)
+                                                             : col(C::RED);
+    printf("\n  %sPredicted TSPU verdict:%s %s%s%s  (A=%d named / B=%d soft)\n",
+           col(C::BOLD), col(C::RST), tc, a.tspu_tier.c_str(), col(C::RST),
+           a.a_hits, a.b_hits);
+    printf("  %s%s%s\n", col(C::DIM), a.verdict_line.c_str(), col(C::RST));
+
+    if (a.tspu_tier.rfind("PASS", 0) == 0)     return 0;
+    if (a.tspu_tier.rfind("THROTTLE", 0) == 0) return 1;
+    if (a.tspu_tier.rfind("BLOCK", 0) == 0)    return 2;   // "BLOCK (accumulative)"
+    return 3;                                              // "IMMEDIATE BLOCK"
+}
+
 void help() {
     printf("ByeByeVPN — full TSPU/DPI/VPN detectability scanner\n\n");
     printf("Usage:\n");
@@ -34,10 +106,15 @@ void help() {
     printf("  byebyevpn udp <ip>             UDP probes only\n");
     printf("  byebyevpn tls <ip> [port]      TLS + SNI consistency only\n");
     printf("  byebyevpn j3 <ip> [port]       J3 active probing only\n");
+    printf("  byebyevpn grpc <ip> [port]     HTTP/2 + gRPC transport probe (VLESS/VMess-gRPC)\n");
     printf("  byebyevpn geoip <ip>           GeoIP only\n");
     printf("  byebyevpn snitch <ip> [port]   SNITCH RTT/GeoIP consistency (methodika §10.1)\n");
     printf("  byebyevpn trace <ip>           Traceroute hop-count analysis\n");
-    printf("  byebyevpn local                scan THIS machine (split-tunnel / VPN procs)\n\n");
+    printf("  byebyevpn local                scan THIS machine (split-tunnel / VPN procs)\n");
+    printf("  byebyevpn audit-config <file>  predict an Xray/sing-box config's TSPU detectability\n");
+    printf("                                 BEFORE deploy (static, no network)\n");
+    printf("  byebyevpn sweep <cidr>         light-probe a subnet (e.g. 1.2.3.0/24) and cluster\n");
+    printf("                                 hosts by TLS fingerprint (JA4S + cert)\n\n");
     printf("Port-scan modes (default: --full):\n");
     printf("  --full              scan ALL ports 1-65535  (default)\n");
     printf("  --fast              205 curated VPN/proxy/TLS/admin ports\n");
@@ -101,6 +178,7 @@ void interactive() {
         printf("  %s[7]%s  Local analysis        — this machine: VPN adapters, split-tunnel, processes\n", col(C::CYN), col(C::RST));
         printf("  %s[8]%s  SNITCH latency check  — RTT + GeoIP consistency (methodika §10.1)\n", col(C::CYN), col(C::RST));
         printf("  %s[9]%s  Traceroute            — ICMP hop count analysis (ttl sweep)\n", col(C::CYN), col(C::RST));
+        printf("  %s[a]%s  Config audit          — predict an Xray/sing-box config's detectability (pre-deploy)\n", col(C::CYN), col(C::RST));
         printf("  %s[0]%s  Exit\n\n", col(C::CYN), col(C::RST));
         string s = ask("  > ");
         if (s.empty()) continue;
@@ -244,6 +322,10 @@ void interactive() {
                            tr.max_rtt_jump_ms, tr.long_hops);
                 }
             }
+            pause_for_enter();
+        } else if (c == 'a' || c == 'A') {
+            string p = ask("  path to Xray/sing-box JSON config: ");
+            if (!p.empty()) run_config_audit(p);
             pause_for_enter();
         }
     }

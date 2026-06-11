@@ -1,0 +1,20 @@
+{
+  "inbounds": [{
+    "protocol": "vless",
+    "port": 443,
+    "settings": {
+      "clients": [{ "id": "00000000-0000-0000-0000-000000000000", "flow": "xtls-rprx-vision" }],
+      "fallbacks": [{ "dest": 8080 }]
+    },
+    "streamSettings": {
+      "network": "tcp",
+      "security": "reality",
+      "realitySettings": {
+        "show": false,
+        "dest": "gitlab.example.org:443",
+        "serverNames": ["gitlab.example.org"],
+        "shortIds": ["0123abcd"]
+      }
+    }
+  }]
+}

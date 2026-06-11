@@ -12,6 +12,7 @@
 #include "scan/tls.h"
 #include "scan/sni.h"
 #include "scan/j3.h"
+#include "scan/grpc.h"
 #include "scan/snitch.h"
 #include "geoip/geoip.h"
 #include "local/local.h"
@@ -19,6 +20,7 @@
 #include "app/orchestrator.h"
 #include "app/target.h"
 #include "app/json_report.h"
+#include "app/sweep.h"
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -113,7 +115,8 @@ int main(int argc, char** argv) {
             if (!pos.empty()) {
                 static const set<string> cmds = {
                     "scan","full","ports","udp","tls","j3","geoip",
-                    "snitch","trace","traceroute","local","me","self","help"
+                    "snitch","trace","traceroute","local","me","self","help",
+                    "audit-config","audit","sweep","grpc"
                 };
                 if (pos.size() >= 2 && cmds.count(pos[0])) target = pos[1];
                 else                                       target = pos[0];
@@ -146,7 +149,7 @@ int main(int argc, char** argv) {
                                  lt->tm_hour, lt->tm_min, lt->tm_sec);
             if (!pos.empty())
                 std::fprintf(g_save_fp, "**Target:** `%s`  \n", pos.back().c_str());
-            std::fprintf(g_save_fp, "**Scanner version:** v2.7.0  \n\n");
+            std::fprintf(g_save_fp, "**Scanner version:** v2.8.0  \n\n");
             std::fprintf(g_save_fp, "```\n");
         }
     }
@@ -190,8 +193,32 @@ int main(int argc, char** argv) {
             show("WireGuard",      51820, wireguard_probe(ip, 51820));
             show("AmneziaWG Sx=8", 51820, amneziawg_probe(ip, 51820));
             show("AmneziaWG Sx=8", 55555, amneziawg_probe(ip, 55555));
-            show("Hysteria2 QUIC", 36712, hysteria2_probe(ip, 36712));
-            show("Hysteria2 QUIC", 443,   hysteria2_probe(ip, 443));
+            // curated Hysteria2/QUIC port set (was just 36712 + 443); print
+            // responders individually, collapse the silent ones to one line.
+            static const int HY_PORTS[] = {443, 8443, 2096, 36712, 5667, 34567, 20000};
+            int qp = 0;
+            string hy_silent;
+            for (int hp : HY_PORTS) {
+                UdpResult u = hysteria2_probe(ip, hp);
+                if (u.responded) {
+                    show("Hysteria2 QUIC", hp, u);
+                    string qs = quic_reply_summary(u);
+                    if (!qs.empty()) printf("                            %s\n", qs.c_str());
+                    if (!qp) qp = hp;
+                } else {
+                    if (!hy_silent.empty()) hy_silent += ",";
+                    hy_silent += std::to_string(hp);
+                }
+            }
+            if (!hy_silent.empty())
+                printf("  Hysteria2/QUIC:  silent on %s\n", hy_silent.c_str());
+            if (qp) {
+                UdpResult vn = hysteria2_vn_probe(ip, qp);
+                string qs = quic_reply_summary(vn);
+                string line = vn.responded ? (qs.empty() ? vn.reply_hex : qs)
+                                           : ("no VN answer (" + vn.err + ")");
+                printf("  UDP:%-5d  %-22s  %s\n", qp, "QUIC version-negotiation", line.c_str());
+            }
         } else if (cmd == "tls") {
             if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
             int port = pos.size() >= 3 ? std::atoi(pos[2].c_str()) : 443;
@@ -270,6 +297,25 @@ int main(int argc, char** argv) {
             printf("  => %d hops, reached=%s, max_rtt_jump=%dms, long_hops>150ms=%d\n",
                    tr.hop_count, tr.reached_target ? "yes" : "no",
                    tr.max_rtt_jump_ms, tr.long_hops);
+        } else if (cmd == "grpc") {
+            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
+            int port = pos.size() >= 3 ? std::atoi(pos[2].c_str()) : 443;
+            auto rs = resolve_host(pos[1]);
+            string ip = rs.primary_ip.empty() ? pos[1] : rs.primary_ip;
+            GrpcProbe gp = grpc_probe(ip, port, pos[1]);
+            if (!gp.tls_ok) { printf("  TLS fail: %s\n", gp.err.c_str()); rc = 1; goto done; }
+            printf("  ALPN=%s  h2=%s  h2-frames=%s  headers=%s  rst=%s  goaway=%s\n",
+                   gp.alpn.empty() ? "-" : gp.alpn.c_str(),
+                   gp.alpn_h2 ? "yes" : "no", gp.h2_frames ? "yes" : "no",
+                   gp.headers_resp ? "yes" : "no", gp.stream_reset ? "yes" : "no",
+                   gp.goaway ? "yes" : "no");
+            printf("  => %s\n", gp.note.c_str());
+        } else if (cmd == "audit-config" || cmd == "audit") {
+            if (pos.size() < 2) { printf("need a config file path\n"); rc = 64; goto done; }
+            rc = run_config_audit(pos[1]);
+        } else if (cmd == "sweep") {
+            if (pos.size() < 2) { printf("need a CIDR (e.g. 1.2.3.0/24)\n"); rc = 64; goto done; }
+            rc = run_sweep(pos[1]);
         } else if (cmd == "help" || cmd == "--help") {
             help();
         } else {

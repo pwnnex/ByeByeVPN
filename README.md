@@ -11,7 +11,7 @@
 | |_) | |_| |  __/ |_) | |_| |  __/\ V / |  __/| |\  |
 |____/ \__, |\___|____/ \__, |\___| \_/  |_|   |_| \_|
        |___/            |___/
-   Full TSPU/DPI/VPN detectability scanner   v2.7.0
+   Full TSPU/DPI/VPN detectability scanner   v2.8.0
 ```
 
 **Languages:** [English](#english) · [Русский](#русский) · [简体中文](README.zh-CN.md) · [فارسی](README.fa.md)
@@ -204,7 +204,7 @@ match appears, and re-runs the grep across the full tree on every tag.
 
 ### Install
 
-Windows: download `byebyevpn-v2.7.0-win64.zip` from
+Windows: download `byebyevpn-v2.8.0-win64.zip` from
 [Releases](../../releases), extract, run `byebyevpn.exe` - either
 double-click for the interactive menu, or pass an IP/hostname from
 the terminal.
@@ -236,6 +236,8 @@ byebyevpn geoip 8.8.8.8          # geoip aggregation
 byebyevpn snitch my.server.ru    # rtt vs geo (methodika §10.1)
 byebyevpn trace my.server.ru     # icmp hop-count
 byebyevpn local                  # scan this machine
+byebyevpn audit-config cfg.json  # predict a config's detectability (v2.8.0)
+byebyevpn sweep 1.2.3.0/24       # cluster a subnet by TLS fingerprint (v2.8.0)
 ```
 
 A completed full scan exits with the verdict tier so wrapper scripts
@@ -251,6 +253,37 @@ Hostnames are resolved via `getaddrinfo`; IPv4 is always preferred,
 and the chosen IP is printed in phase [1/8]. On IPv4-only links (RU /
 CIS consumer internet) this avoids the happy-eyeballs AAAA trap where
 an unreachable v6 silently burns every timeout.
+
+### Config audit (pre-deploy, v2.8.0)
+
+`byebyevpn audit-config <file>` runs the verdict engine's signal logic
+**statically against an Xray (v2ray-core) or sing-box JSON config** —
+before you deploy it, with no network and no target. It reuses the same
+brand→ASN table the live scanner uses, so the checks line up one-to-one
+with what a real scan would later find on the wire:
+
+- Reality `dest=` / sing-box `handshake.server` pointing at a major brand
+  (amazon/apple/microsoft/google/cloudflare/yandex/…) — the cert-on-non-
+  owning-ASN tell. **HIGH.**
+- named-protocol defaults: Shadowsocks on :8388/:8488, WireGuard on
+  :51820, Hysteria2 / TUIC inbounds — the A-tier instant-block signatures.
+- plaintext inbounds (`security: none`, ws/grpc without TLS).
+- missing `fallbacks` (the silent-on-junk pattern J3 probes for),
+  `show: true` debug leak, empty/missing Reality `shortIds`, VLESS without
+  `xtls-rprx-vision` flow, and the 3x-ui/x-ui/Marzban panel-port cluster.
+
+Output is a per-finding list (severity + what + how-to-fix) and a
+**predicted TSPU verdict** (`PASS / THROTTLE / BLOCK / IMMEDIATE BLOCK`)
+using the same A/B tiering as a live scan. Exit code mirrors the scan
+tiers: `0 PASS, 1 THROTTLE, 2 BLOCK, 3 IMMEDIATE BLOCK, 64` on a file /
+parse error — so a deploy script can gate on it:
+
+```bash
+byebyevpn audit-config /etc/xray/config.json || { echo "fix the config first"; exit 1; }
+```
+
+The advisor is fully offline and emits nothing on the wire; it only reads
+the JSON file you hand it.
 
 ### Port scan modes
 
@@ -337,9 +370,14 @@ release's notes for verification.
   no peer cert for the Chrome side - cert-steering detection still
   relies on the openssl-side handshake. The main `tls_probe` JA3 is
   still OpenSSL-default; this is noted in the output as an advisory.
-- QUIC probes are version-negotiation only - no derived-key
-  handshake. Enough to verify port liveness, not to fingerprint
-  the specific QUIC stack.
+- QUIC probes (v2.8.0) send a real RFC 9001 protected Initial - the
+  Initial key schedule, AEAD payload protection and header protection
+  are byte-exact against the RFC 9001 Appendix A test vectors, and a
+  TLS ClientHello rides in a CRYPTO frame. a QUIC listener decrypts it
+  and answers. the ClientHello does not yet carry the
+  quic_transport_parameters extension, so the probe confirms a QUIC
+  endpoint and captures its response shape, but does not drive a full
+  QUIC handshake to completion.
 - GeoIP providers disagree; `ipapi.is` flags any hosting IP as
   "VPN". Score is built on behaviour, not on single-source tags.
 
@@ -508,7 +546,7 @@ CI workflow (`.github/workflows/release.yml`) проваливает сборк�
 
 ### Установка
 
-Windows: скачать `byebyevpn-v2.7.0-win64.zip` со страницы
+Windows: скачать `byebyevpn-v2.8.0-win64.zip` со страницы
 [Releases](../../releases), распаковать, запустить `byebyevpn.exe`
 (двойной клик = интерактивное меню, либо IP/hostname из терминала).
 
@@ -538,6 +576,8 @@ byebyevpn geoip 8.8.8.8          # GeoIP
 byebyevpn snitch my.server.ru    # RTT vs geo (§10.1)
 byebyevpn trace my.server.ru     # ICMP hop-count
 byebyevpn local                  # сканировать свою машину
+byebyevpn audit-config cfg.json  # детектируемость конфига до деплоя (v2.8.0)
+byebyevpn sweep 1.2.3.0/24       # кластеризация подсети по TLS-отпечатку (v2.8.0)
 ```
 
 Завершённый full scan выходит с кодом по уровню вердикта, чтобы
@@ -639,9 +679,13 @@ pinned msys2 образа. SHA256 exe и zip печатаются в release not
   Chrome-стороны нет сертификата peer'а - детект cert-steering
   всё ещё опирается на openssl-handshake. JA3 основного `tls_probe`
   по-прежнему OpenSSL-default, отмечено в выводе как advisory.
-- QUIC probe - только version negotiation. Достаточно чтобы
-  проверить liveness порта, не достаточно чтобы идентифицировать
-  конкретный QUIC-стек.
+- QUIC-пробы (v2.8.0) шлют настоящий защищённый Initial по RFC 9001 -
+  key schedule, AEAD-защита payload и header protection байт-в-байт
+  совпадают с тест-векторами RFC 9001 Appendix A, а внутри CRYPTO-фрейма
+  едет TLS ClientHello. QUIC-сервер расшифровывает его и отвечает. В
+  ClientHello пока нет расширения quic_transport_parameters, так что
+  проба подтверждает QUIC-эндпоинт и снимает форму ответа, но не
+  доводит полный QUIC-handshake до конца.
 - GeoIP-провайдеры часто несогласны друг с другом; `ipapi.is` метит
   любой hosting-IP как VPN. Score построен на поведении, а не на
   single-source флагах.

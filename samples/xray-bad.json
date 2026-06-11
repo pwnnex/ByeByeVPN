@@ -1,0 +1,17 @@
+{
+  "inbounds": [{
+    "protocol": "vless",
+    "port": 8443,
+    "settings": { "clients": [{ "id": "00000000-0000-0000-0000-000000000000", "flow": "" }] },
+    "streamSettings": {
+      "network": "tcp",
+      "security": "reality",
+      "realitySettings": {
+        "show": true,
+        "dest": "www.microsoft.com:443",
+        "serverNames": ["www.microsoft.com"],
+        "shortIds": [""]
+      }
+    }
+  }]
+}

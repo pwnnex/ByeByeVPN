@@ -24,6 +24,7 @@ set(BBVPN_SOURCES
     src/common/console.cpp
     src/common/util.cpp
     src/common/tspu.cpp
+    src/common/json.cpp
 
     src/net/dns.cpp
     src/net/tcp.cpp
@@ -51,12 +52,18 @@ set(BBVPN_SOURCES
     src/scan/tcpfp.cpp
     src/scan/ja4s_db.cpp
     src/scan/amnezia_probe.cpp
+    src/scan/quic.cpp
+    src/scan/grpc.cpp
+    src/scan/transport_probe.cpp
 
     src/local/local.cpp
 
     src/app/target.cpp
     src/app/orchestrator.cpp
     src/app/json_report.cpp
+    src/app/config_audit.cpp
+    src/app/sweep_core.cpp
+    src/app/sweep.cpp
     src/app/cli.cpp
 )
 

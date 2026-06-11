@@ -1,5 +1,242 @@
 # Changelog
 
+## v2.8.0 - 2026-06-01
+
+a proactive release. every prior version answered "is this *deployed*
+host detectable?" by probing it on the wire. v2.8.0 adds the question
+you actually want answered first: "will this *config* be detectable
+once I deploy it?" — answered statically, offline, before the server
+ever goes live.
+
+### new: `audit-config` — pre-deploy detectability advisor
+
+`byebyevpn audit-config <file>` parses an Xray (v2ray-core) or sing-box
+JSON config and runs the verdict engine's signal logic against it
+without touching the network. it reuses the exact brand→ASN table
+(`src/scan/brand.cpp`) the live scanner uses, so a finding in the
+advisor maps one-to-one to what a real scan would later surface on the
+wire.
+
+checks implemented:
+
+- **Reality dest = major brand** (Xray `realitySettings.dest` /
+  sing-box `tls.reality.handshake.server`): the cert-on-non-owning-ASN
+  tell, the single cheapest Reality giveaway. HIGH.
+- **named-protocol defaults** (A-tier instant block): Shadowsocks on
+  :8388/:8488, WireGuard on :51820, Hysteria2 / TUIC inbounds.
+- **plaintext inbounds**: `security: none`, ws/grpc/httpupgrade with no
+  TLS.
+- **soft tells**: missing `fallbacks` (the silent-on-junk pattern J3
+  probes for), `show: true` debug leak, empty/missing Reality
+  `shortIds`, VLESS without `xtls-rprx-vision`, and the
+  3x-ui/x-ui/Marzban panel-port cluster across inbounds.
+
+output is a per-finding list (severity + explanation + how-to-fix) plus
+a predicted TSPU verdict (`PASS / THROTTLE / BLOCK / IMMEDIATE BLOCK`)
+using the same A/B tiering as a live scan. the exit code mirrors the
+scan tiers (`0/1/2/3`, `64` on file/parse error) so a deploy pipeline
+can gate on it.
+
+more checks and inputs:
+
+- `deprecated-flow` (xtls-rprx-direct / origin / splice), `tls-min-version`
+  (a TLS floor below 1.3), a multi-port-Reality flag, and exact-duplicate
+  dedup across inbounds.
+- beyond JSON, the advisor now also reads **WireGuard / AmneziaWG `.conf`
+  (INI)** — it flags plain WireGuard on :51820 (named signature) and
+  recognises AmneziaWG by its Jc/Jmin/Jmax/S1/S2/H1-H4 obfuscation params.
+- `--json` emits the whole audit as a machine-readable object for
+  pipelines (`config_audit_to_json`).
+
+### new: real QUIC v1 Initial (RFC 9000 / RFC 9001)
+
+the Hysteria2 / QUIC probe used to send an *unprotected* dummy Initial
+— enough for liveness, but not a packet a real QUIC server would
+accept. v2.8.0 adds a full RFC 9001 Initial-packet implementation in
+`src/scan/quic.cpp`:
+
+- the Initial **key schedule**: HKDF-Extract + HKDF-Expand-Label off
+  the Destination Connection ID and the QUIC v1 salt, yielding the
+  client/server `key` / `iv` / `hp`.
+- **AEAD payload protection** (AES-128-GCM with the QUIC nonce
+  construction) and **header protection** (AES-128-ECB sample → mask).
+- a builder that wraps a real TLS ClientHello in a CRYPTO frame, seals
+  it, masks the header, and pads to the 1200-byte anti-amplification
+  minimum — the exact shape a genuine QUIC client emits.
+
+the crypto is **byte-exact against the RFC 9001 Appendix A test
+vectors** (A.1 key schedule, A.2 header-protection mask) plus a
+build→deprotect→decrypt round-trip — all asserted in
+`tests/test_quic.cpp`. `hysteria2_probe` now emits this real protected
+Initial, so a QUIC listener's tag check and header deprotection succeed
+and it actually answers (Initial / Retry / version-negotiation /
+CONNECTION_CLOSE), where the old dummy was often ignored.
+
+the QUIC probe goes further than liveness:
+
+- the CRYPTO frame now carries a **proper QUIC ClientHello** — TLS 1.3,
+  ALPN `h3`, and the `quic_transport_parameters` extension (0x39) with
+  `initial_source_connection_id` — so a compliant server accepts it.
+- a **Version-Negotiation probe** (`hysteria2_vn_probe`) sends an Initial
+  with a reserved version; a conformant server replies with a VN packet
+  listing every version it supports — a QUIC-stack fingerprint.
+- a **response parser** (`quic_parse_response`) classifies what comes
+  back (Initial / Retry / Version-Negotiation + version list / short
+  header) and the scan prints it inline.
+- **multi-port coverage**: the Hysteria2/QUIC probe now sweeps a curated
+  port set (443, 8443, 2096, 36712, 5667, 34567, 20000) plus any open TCP
+  port ≥ 443 (Hysteria2 usually shares its number with a TLS masquerade),
+  instead of just 36712 + 443.
+- verified live: a real protected Initial to a Cloudflare `1.1.1.1:443`
+  endpoint is decrypted and answered with a v1 Initial, and the VN probe
+  returns the offered version list — interop-correct, not just
+  self-consistent.
+
+### new: subnet sweep + fingerprint clustering
+
+`byebyevpn sweep <cidr>` light-probes every host in an IPv4 CIDR (capped
+at 1024 hosts) on :443 — a liveness connect, a JA4S probe and a cert
+probe, no port scan or J3 — then **clusters hosts by TLS fingerprint**
+(JA4S ext-hash + cert issuer + cert SHA). identical deployments collapse
+into one cluster, so an identical JA4S + cloned cert across many IPs on a
+provider is the multi-host Reality/proxy-farm signature. the CIDR math
+and clustering are pure (`src/app/sweep_core.cpp`, unit-tested); the
+threaded probing is in `src/app/sweep.cpp`.
+
+### fix: JA4S classifier was over-claiming
+
+the seed table labeled the ext-hash `a56c5b993250` as "cloudflare-edge".
+this project's own probes show it identical on Cloudflare, GitHub, Caddy
+AND Microsoft — because it is the *universal* TLS 1.3 ServerHello shape
+(only supported_versions + key_share are in the clear; ALPN etc. move
+into EncryptedExtensions). it is now labeled `tls13-generic-serverhello`
+with that explanation, plus a real observed `tls12-openssl-family`
+ext-hash (`c0bc851e483b`, seen on nginx.org / mail.ru) and a smarter
+structural band for multi-extension TLS 1.2 ServerHellos. the dormant
+`ja4h()` is now wired in too: the scan discloses the JA4H of its own
+HTTP-over-TLS request, the same transparency move as the existing
+"Our ClientHello JA3" line.
+
+### fix: three scanner false positives (found on a real dzen.ru scan)
+
+- **CONNECT ≠ open proxy.** `fp_http_connect` flagged *any* HTTP reply to a
+  `CONNECT` as an open HTTP proxy (`[vpn-like]`, −20, a Strong signal). a
+  real web edge (envoy/nginx) answers `CONNECT` with `404`/`405` — a
+  rejection, not a tunnel. now only a `2xx` ("Connection established")
+  counts as a proxy.
+- **brand impersonation needs ASN data.** a cert for a known brand was
+  flagged as Reality cert-cloning whenever `asn_owns_brand()` returned
+  false — including when there was *no* ASN data at all (`--no-geoip` or
+  failed lookups), since the check trivially fails on an empty org list.
+  that falsely accused legit brand endpoints (e.g. `*.dzen.ru` on VK's own
+  ASN). impersonation is now asserted only when ASN data exists AND the
+  ASN doesn't own the brand; with no ASN data it downgrades to an
+  informational "cannot verify".
+- **TLS alert ≠ proxy framing.** a TLS server answering a malformed
+  ClientHello with an alert record (`15 03 03 …`) was counted as "raw
+  non-HTTP bytes — Shadowsocks/Trojan/custom proxy". a TLS alert is the
+  textbook-correct server response; J3 now recognises TLS records and
+  excludes them from the proxy-framing tally.
+- **uniform error page ≠ canned fallback.** the canned-fallback detector
+  fired when two *valid HTTP* probes shared a reply (e.g. a uniform `503`
+  on :80). but the fallback signature is the SAME page served to a real
+  request AND to garbage (SSH banner / random / 0xFF / TLS-CH / CONNECT).
+  a server that answers garbage with `400` but valid HTTP with `503` is
+  *differentiating* input — the opposite of a stream-proxy fallback. the
+  matched set must now contain both a valid-HTTP and a garbage probe.
+- **SNITCH latency was Moscow/EU-only (issue #10).** the per-country RTT
+  bands assumed a Moscow/EU vantage, so a user elsewhere (e.g. RU far-east,
+  where Tokyo is ~45ms not ~150ms) got a false "impossibly low" hit. the
+  primary anycast/proxy tell is now vantage-INDEPENDENT: a target is flagged
+  only when it answers at/under the observer's own nearest-anchor floor
+  (you can't reach a real remote server faster than your nearest CDN pop).
+  the absolute country bands are applied only when the observer actually
+  looks Moscow/EU-ish (low RTT to the Moscow anchor); otherwise the scan
+  says so and skips them.
+
+net effect: `dzen.ru` went from a wrong `NOISY 75 / open-proxy /
+Xray-Reality-cert-cloning` to a correct `CLEAN 95 / PASS`; `rustore.ru`
+(legit VK app store) went from `SUSPICIOUS 58 / canned-fallback /
+open-proxy` to a correct `CLEAN 96 / PASS`; far-east users no longer get a
+false SNITCH geo-conflict on low-latency nearby servers.
+
+### new: HTTP/2 + gRPC transport probe
+
+`byebyevpn grpc <ip> [port]` (also run inline during a full scan)
+negotiates TLS with ALPN `h2`; if the server speaks HTTP/2 it sends a
+real HTTP/2 gRPC request (client preface + SETTINGS + a HEADERS frame
+with HPACK-encoded `:method POST` / `:path /…ServerReflection…` /
+`content-type application/grpc`) and classifies the reaction: a HEADERS
+response, a stream RST, a GOAWAY, or silence. gRPC requires HTTP/2, so a
+VLESS/VMess-gRPC inbound is h2-only and routes one specific service
+path — an h2-only origin that also drops plain HTTP/1.1-over-TLS, on a
+sparse hosting host, is the gRPC-transport-proxy shape (a soft signal;
+real gRPC APIs and modern h2 sites are deliberately NOT flagged). new
+module `src/scan/grpc.{h,cpp}`.
+
+### new: VLESS-WebSocket + NaiveProxy transport probes
+
+two more transport detectors (`src/scan/transport_probe.{h,cpp}`), run
+inline on every TLS port:
+
+- **NaiveProxy / Caddy `forward_proxy`** — a proxy-style absolute-URI
+  request over TLS draws a `407 Proxy-Authenticate` from a forward proxy,
+  where a normal web server just `400`s. that 407-over-TLS is a specific,
+  low-false-positive NaiveProxy/forward-proxy signature → a strong signal
+  + a B-tier TSPU rule.
+- **VLESS/VMess-WebSocket** — a WebSocket `Upgrade` over TLS on a few
+  common ws paths (`/`, `/ws`, `/vless`, `/vmess`, …); a `101 Switching
+  Protocols` on a guessed path means an open ws endpoint. flagged as a
+  soft signal only on a sparse hosting profile (real chat/realtime apps
+  also speak WebSocket, so a bare 101 is a note otherwise).
+
+verified to NOT false-positive on legit sites (a normal origin neither
+101s a guessed path nor 407s a proxy request).
+
+### chore: quieter Hysteria2/QUIC output
+
+the multi-port Hysteria2 sweep printed one "no answer" line per port (a
+7-line wall). responders are now printed individually; the silent
+majority collapses to a single `N port(s) silent (…)` line.
+
+### new modules
+
+- `src/scan/grpc.{h,cpp}` — the HTTP/2 + gRPC transport probe (hand-rolled
+  HTTP/2 framing + minimal HPACK encode, frame-type response analysis).
+- `src/scan/quic.{h,cpp}` — the QUIC v1 Initial key schedule, AEAD +
+  header protection, the protected-Initial builder, the QUIC ClientHello
+  + transport-params builder, the VN probe and the response parser.
+  OpenSSL-only, no winsock; the datagram is handed to `udp_probe()`.
+- `src/app/sweep.{h,cpp}` + `src/app/sweep_core.cpp` — subnet sweep;
+  pure CIDR/clustering split from the threaded networking half.
+
+- `src/common/json.{h,cpp}` — a small dependency-free JSON parser
+  (objects / arrays / strings / numbers / bools / null, `//` and
+  `/* */` comments tolerated, bounded recursion, never throws). pure
+  and platform-agnostic; compiled into the Linux unit-test build.
+- `src/app/config_audit.{h,cpp}` — the auditor core, returning a
+  structured `ConfigAudit`. no console / no Win32 deps, so the whole
+  advisor is unit-tested on the Linux CI runner. the colored CLI
+  printer lives in `src/app/cli.cpp`.
+
+### tests
+
+- new doctest files: `test_json.cpp`, `test_config_audit.cpp` (16 cases
+  incl. .conf + `--json`), `test_quic.cpp` (12 cases, RFC 9001 KAT +
+  VN/parse/round-trip), `test_sweep.cpp` (6 cases, CIDR + clustering),
+  plus expanded `test_ja4.cpp`. the full suite is **76 cases / 3299
+  assertions**, green under `-Werror` and ASan+UBSan.
+
+### on-the-wire posture
+
+`audit-config` is fully offline — it reads only the JSON file you hand
+it and emits nothing on the wire. the one wire change this release is
+the Hysteria2/QUIC probe: it now sends a real RFC 9001 protected
+Initial (a packet a genuine QUIC client would send) instead of the old
+unprotected dummy — strictly more realistic, not scanner-shaped. no
+tool-identifying bytes are added; the source-string audit still passes
+at 1/3.
+
 ## v2.7.0 - 2026-05-15
 
 an anti-fingerprint release. the v2.6.0 detection features ship the

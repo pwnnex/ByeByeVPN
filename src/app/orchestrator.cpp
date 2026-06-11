@@ -23,6 +23,8 @@
 #include "../scan/snitch.h"
 #include "../scan/ct.h"
 #include "../scan/utls.h"
+#include "../scan/grpc.h"
+#include "../scan/transport_probe.h"
 #include "../scan/tcpfp.h"
 #include "../scan/ja4.h"
 #include "../scan/ja4s_db.h"
@@ -194,6 +196,11 @@ FullReport run_full_target(const string& target) {
         if (u.responded) printf("%sRESP %dB%s  %s", col(C::GRN), u.bytes, col(C::RST), u.reply_hex.c_str());
         else             printf("%sno answer (%s)%s", col(C::DIM), u.err.empty()?"closed/filtered":u.err.c_str(), col(C::RST));
         printf("\n");
+        if (u.responded && std::strcmp(kind, "hysteria2") == 0) {
+            string qs = quic_reply_summary(u);
+            if (!qs.empty())
+                printf("             %s-> %s%s\n", col(C::CYN), qs.c_str(), col(C::RST));
+        }
         R.udp_probes.push_back({port, kind, u});
     };
     // vanilla WireGuard on the default port.
@@ -204,9 +211,60 @@ FullReport run_full_target(const string& target) {
     // is running an obfuscated WG header offset.
     udp_show(51820, "amnezia",   "AmneziaWG Sx=8",      amneziawg_probe(R.dns.primary_ip, 51820));
     udp_show(55555, "amnezia",   "AmneziaWG Sx=8",      amneziawg_probe(R.dns.primary_ip, 55555));
-    // Hysteria2 (QUIC v1 Initial) on its default port + :443.
-    udp_show(36712, "hysteria2", "Hysteria2 QUIC",      hysteria2_probe(R.dns.primary_ip, 36712));
-    udp_show(443,   "hysteria2", "Hysteria2 QUIC :443", hysteria2_probe(R.dns.primary_ip, 443));
+    // Hysteria2 (real protected QUIC v1 Initial). probe a curated set of
+    // community-common Hysteria2/QUIC ports PLUS any open TCP port >= 443 (a
+    // Hysteria2 listener usually shares its number with a TLS masquerade on
+    // the same port). deduped via the set; capped so a busy host can't blow up
+    // the UDP phase. the first port that answers is remembered for the VN
+    // follow-up.
+    std::set<int> hy_ports = {443, 8443, 2096, 36712, 5667, 34567, 20000};
+    for (auto& o : R.open_tcp) if (o.port >= 443) hy_ports.insert(o.port);
+    int hy_live_port = 0, hy_done = 0;
+    vector<int> hy_silent;
+    for (int hp : hy_ports) {
+        if (hy_done++ >= 12) break;
+        UdpResult u = hysteria2_probe(R.dns.primary_ip, hp);
+        R.udp_probes.push_back({hp, "hysteria2", u});
+        if (u.responded) {
+            printf("  %sUDP:%-5d%s  %-22s  %sRESP %dB%s  %s\n",
+                   col(C::GRN), hp, col(C::RST), "Hysteria2 QUIC",
+                   col(C::GRN), u.bytes, col(C::RST), u.reply_hex.c_str());
+            string qs = quic_reply_summary(u);
+            if (!qs.empty())
+                printf("             %s-> %s%s\n", col(C::CYN), qs.c_str(), col(C::RST));
+            if (!hy_live_port) hy_live_port = hp;
+        } else {
+            hy_silent.push_back(hp);
+        }
+    }
+    // collapse the (usually all) silent ports into one line instead of a wall.
+    if (!hy_silent.empty()) {
+        string ports;
+        for (size_t i = 0; i < hy_silent.size(); ++i) {
+            if (i) ports += ",";
+            ports += std::to_string(hy_silent[i]);
+        }
+        printf("  %sUDP Hysteria2/QUIC%s   %zu port(s) silent (%s)\n",
+               col(C::DIM), col(C::RST), hy_silent.size(), ports.c_str());
+    }
+    // if a QUIC listener answered, fire ONE Version-Negotiation probe to the
+    // live port to recover its supported-version list — a QUIC-stack
+    // fingerprint. only sent when there's actually a QUIC endpoint, so dead
+    // hosts cost no extra datagram. skipped under --passive.
+    if (hy_live_port && !g_passive) {
+        UdpResult vn = hysteria2_vn_probe(R.dns.primary_ip, hy_live_port);
+        string qs = quic_reply_summary(vn);
+        printf("  %sUDP:%-5d%s  %-22s  ",
+               vn.responded ? col(C::GRN) : col(C::DIM),
+               hy_live_port, col(C::RST), "QUIC version-negotiation");
+        if (vn.responded)
+            printf("%sRESP %dB%s  %s", col(C::GRN), vn.bytes, col(C::RST),
+                   qs.empty() ? vn.reply_hex.c_str() : qs.c_str());
+        else
+            printf("%sno VN answer (%s)%s", col(C::DIM),
+                   vn.err.empty() ? "filtered" : vn.err.c_str(), col(C::RST));
+        printf("\n");
+    }
 
     // ---- 4b) AmneziaWG S1 junk-prefix deep-probe -----------------------
     // sweep the S1 obfuscation-prefix size on the default WG port. if a
@@ -231,6 +289,9 @@ FullReport run_full_target(const string& target) {
 
     // ---- 5) Fingerprint per open TCP port ------------------------------
     printf("\n%s[5/8] Service fingerprints per open port%s\n", col(C::BOLD), col(C::RST));
+    vector<int> grpc_h2only_ports;   // h2-only origins that reject plain HTTP/gRPC path
+    vector<std::pair<int,string>> naive_ports;   // (port, Proxy-Authenticate) NaiveProxy/forward-proxy
+    vector<std::pair<int,string>> ws_ports;      // (port, path) VLESS/VMess-WebSocket
     auto is_tls_port = [](int p){
         return p==443||p==4433||p==4443||p==8443||p==8080||p==8843||p==8444
              ||p==9443||p==10443||p==14443||p==20443||p==21443||p==22443||p==50443||p==51443||p==55443
@@ -414,6 +475,45 @@ FullReport run_full_target(const string& target) {
                                    jc, ji.family.c_str(), col(C::RST),
                                    ji.confidence.c_str(), ji.note.c_str());
                         }
+                    }
+                }
+
+                // HTTP/2 + gRPC transport probe (one extra TLS handshake on
+                // the TLS port; skipped under --passive). detects h2-only
+                // origins and how they react to a gRPC-shaped HTTP/2 request.
+                if (!g_passive) {
+                    GrpcProbe gp = grpc_probe(R.dns.primary_ip, o.port, R.dns.host);
+                    if (gp.tls_ok) {
+                        const char* gc = (gp.stream_reset || (gp.alpn_h2 && !gp.h2_frames))
+                                           ? col(C::YEL)
+                                           : gp.alpn_h2 ? col(C::CYN) : col(C::DIM);
+                        printf("        %sgRPC/h2 probe:%s %s%s%s\n",
+                               col(C::DIM), col(C::RST), gc, gp.note.c_str(), col(C::RST));
+                        // an h2-only origin whose plain HTTP/1.1-over-TLS probe
+                        // got nothing, or that RSTs a gRPC stream, is the
+                        // gRPC-transport-proxy shape (VLESS/VMess-gRPC).
+                        bool h11_silent = pf.https && pf.https->tls_ok && !pf.https->responded;
+                        if (gp.alpn_h2 && (gp.stream_reset || h11_silent || !gp.h2_frames))
+                            grpc_h2only_ports.push_back(o.port);
+                    }
+                }
+
+                // VLESS/VMess-WebSocket + NaiveProxy/forward-proxy transport
+                // probes (one TLS handshake each; skipped under --passive).
+                if (!g_passive) {
+                    WsProbe wp = ws_probe(R.dns.primary_ip, o.port, R.dns.host);
+                    if (wp.ws_upgrade) {
+                        printf("        %sWebSocket:%s %s101 Switching Protocols on '%s' — open WS endpoint (VLESS/VMess-ws transport)%s\n",
+                               col(C::DIM), col(C::RST), col(C::YEL),
+                               wp.path_hit.c_str(), col(C::RST));
+                        ws_ports.push_back({o.port, wp.path_hit});
+                    }
+                    NaiveProbe np = naive_probe(R.dns.primary_ip, o.port, R.dns.host);
+                    if (np.proxy_auth_required) {
+                        printf("        %sforward-proxy:%s %s407 Proxy-Authenticate over TLS%s — NaiveProxy / Caddy forward_proxy signature  %s%s%s\n",
+                               col(C::DIM), col(C::RST), col(C::RED), col(C::RST),
+                               col(C::DIM), printable_prefix(np.proxy_authenticate, 40).c_str(), col(C::RST));
+                        naive_ports.push_back({o.port, np.proxy_authenticate});
                     }
                 }
             } else {
@@ -614,6 +714,23 @@ FullReport run_full_target(const string& target) {
         if (any_reality_port)
             printf("  %s  -> Reality server here accepted our non-Chrome JA3 — either uTLS-enforcement is OFF (typical Reality default), or the ACCEPT path always runs and divergence is only in fallback routing%s\n",
                    col(C::DIM), col(C::RST));
+    }
+
+    {
+        // disclose the JA4H of our own HTTP-over-TLS probe request — same
+        // transparency spirit as the JA3 line above. these are the bytes WE
+        // put on the wire (GET / with Host, Accept: */*, Connection: close),
+        // no cookies / referer / accept-language.
+        Ja4hInput hin;
+        hin.method = "GET";
+        hin.http_version = "1.1";
+        hin.has_cookie = false;
+        hin.has_referer = false;
+        hin.accept_language = "";
+        hin.header_names_in_order = {"host", "accept", "connection"};
+        string h4 = ja4h(hin);
+        printf("  %sOur HTTP request JA4H:%s %s%s%s  (minimal GET — Host / Accept / Connection)\n",
+               col(C::BOLD), col(C::RST), col(C::DIM), h4.c_str(), col(C::RST));
     }
 
     // ---- 8) Verdict engine ---------------------------------------------
@@ -829,8 +946,18 @@ FullReport run_full_target(const string& target) {
             }
         }
         if (pf.sni && pf.sni->cert_impersonation && !pf.sni->brand_claimed.empty()) {
-            bool owns = asn_owns_brand(pf.sni->brand_claimed, asn_orgs_all);
-            if (!owns) {
+            // impersonation can only be ASSERTED when we have ASN data to check
+            // ownership against. with no GeoIP (--no-geoip / all providers
+            // failed) asn_orgs_all is empty and asn_owns_brand() trivially
+            // returns false — which would falsely flag a legit brand endpoint
+            // (e.g. *.dzen.ru on VK's own ASN) as cert-cloning. so: no ASN
+            // data => downgrade to an informational "can't verify".
+            if (asn_orgs_all.empty()) {
+                note("brand-unverifiable", "cert on :" + std::to_string(pf.port) +
+                     " is for brand '" + pf.sni->brand_claimed +
+                     "' but no ASN/GeoIP data is available (--no-geoip or lookups failed) — "
+                     "cannot check brand ownership, so impersonation is NOT asserted");
+            } else if (!asn_owns_brand(pf.sni->brand_claimed, asn_orgs_all)) {
                 flag_major("cert on :" + std::to_string(pf.port) +
                            " vouches for brand '" + pf.sni->brand_claimed +
                            "' but the ASN is not owned by that brand — Reality-static / "
@@ -858,7 +985,7 @@ FullReport run_full_target(const string& target) {
         if (pf.https && pf.https->tls_ok && pf.https->responded &&
             !pf.https->server_hdr.empty()) {
             string sbr = server_header_brand(pf.https->server_hdr);
-            if (!sbr.empty()) {
+            if (!sbr.empty() && !asn_orgs_all.empty()) {
                 bool owns = asn_owns_brand(sbr, asn_orgs_all);
                 if (!owns) {
                     flag_major("HTTP-over-TLS on :" + std::to_string(pf.port) +
@@ -1053,6 +1180,44 @@ FullReport run_full_target(const string& target) {
         }
     }
 
+    // ---- gRPC / HTTP-2-only transport signal ---------------------------
+    if (!grpc_h2only_ports.empty()) {
+        string ports;
+        for (size_t i = 0; i < grpc_h2only_ports.size(); ++i) {
+            if (i) ports += ",";
+            ports += std::to_string(grpc_h2only_ports[i]);
+        }
+        if (sparse_vps_profile) {
+            flag_minor("h2-only origin on :" + ports + " — ALPN negotiates HTTP/2 but the "
+                       "plain HTTP/1.1-over-TLS probe got nothing back / the gRPC stream was "
+                       "RST, on a sparse hosting host. that's the VLESS/VMess-gRPC transport "
+                       "shape (a gRPC inbound routes only its configured serviceName).", 6);
+        } else {
+            note("grpc-h2", "port " + ports + " speaks HTTP/2 and reacts to a gRPC request "
+                 "like an h2-origin — normal for real gRPC APIs and modern h2 sites; only a "
+                 "proxy tell when combined with a sparse hosting profile");
+        }
+    }
+
+    // ---- NaiveProxy / forward-proxy + WebSocket transport signals ------
+    for (auto& [p, auth] : naive_ports) {
+        flag_major("NaiveProxy / Caddy forward_proxy on :" + std::to_string(p) +
+                   " — a proxy-style request over TLS drew 407 Proxy-Authenticate" +
+                   (auth.empty() ? "" : " ('" + printable_prefix(auth, 30) + "')") +
+                   ". a normal web server has no proxy auth — this is the NaiveProxy / "
+                   "forward-proxy signature.", 18);
+    }
+    for (auto& [p, path] : ws_ports) {
+        if (sparse_vps_profile)
+            flag_minor("WebSocket upgrade accepted (101) on :" + std::to_string(p) +
+                       " path '" + path + "' on a sparse hosting host — VLESS/VMess-ws "
+                       "transport endpoint (a plain website does not 101 a guessed path).", 7);
+        else
+            note("ws-endpoint", "port " + std::to_string(p) + " accepted a WebSocket upgrade "
+                 "on '" + path + "' — a WS endpoint (legit for chat/realtime apps; a proxy tell "
+                 "only with a sparse hosting profile)");
+    }
+
     // ---- J3 active-probe roles ----------------------------------------
     int j3_silent_total = 0, j3_resp_total = 0, j3_ports_checked = 0;
     int j3_canned_ports = 0, j3_badver_ports = 0, j3_raw_nonhttp_ports = 0;
@@ -1153,6 +1318,15 @@ FullReport run_full_target(const string& target) {
                 if (!sb.empty() && !asn_owns_brand(sb, asn_orgs_all))
                     server_brand_mismatch = true;
             }
+            // only call it impersonation when the cert claims a brand the ASN
+            // does NOT own. a cert that legitimately covers its own brand
+            // (e.g. *.dzen.ru on a VK ASN) must not get the [!brand-
+            // impersonation] tag — the penalty path already gates on this, the
+            // role label has to match it.
+            bool cert_brand_mismatch =
+                pf.sni && pf.sni->cert_impersonation && !pf.sni->brand_claimed.empty() &&
+                !asn_orgs_all.empty() &&
+                !asn_owns_brand(pf.sni->brand_claimed, asn_orgs_all);
             char buf[512] = {0};
             std::snprintf(buf, sizeof(buf),
                      " — %s / ALPN=%s / CN=%s / issuer=%s / age=%dd / validity=%dd / SAN=%d%s%s%s%s",
@@ -1162,12 +1336,13 @@ FullReport run_full_target(const string& target) {
                      pf.tls->issuer_cn.empty() ? "(none)" : pf.tls->issuer_cn.c_str(),
                      pf.tls->age_days, pf.tls->total_validity_days, pf.tls->san_count,
                      (pf.tls->total_validity_days > 0 && pf.tls->total_validity_days < 14) ? " [!short-validity]" : "",
-                     (pf.sni && pf.sni->cert_impersonation) ? " [!brand-impersonation]" : "",
+                     cert_brand_mismatch ? " [!brand-impersonation]" : "",
                      server_brand_mismatch ? " [!server-impersonation]" : "",
                      canned_real ? " [!canned-fallback]" : "");
             role += buf;
             bool role_upgraded = false;
-            if (pf.sni && pf.sni->cert_impersonation && !pf.sni->brand_claimed.empty()) {
+            if (pf.sni && pf.sni->cert_impersonation && !pf.sni->brand_claimed.empty()
+                && !asn_orgs_all.empty()) {
                 bool owns = asn_owns_brand(pf.sni->brand_claimed, asn_orgs_all);
                 if (!owns) {
                     const char* label = (pf.sni->passthrough_mode)
@@ -1803,6 +1978,10 @@ FullReport run_full_target(const string& target) {
         bool tspu_hops_hit = (R.trace && R.trace->ok && R.trace->tspu_hops > 0);
         rules.push_back({"TSPU mgmt-subnet in traceroute", tspu_hops_hit,
                          "hop(s) in 10.X.Y.[131-235]/[241-245]/254 range - tspu site on path"});
+        rules.push_back({"NaiveProxy / forward-proxy",   !naive_ports.empty(),
+                         "407 Proxy-Authenticate to a proxy-style request over TLS"});
+        rules.push_back({"VLESS/VMess-WebSocket",        (!ws_ports.empty() && sparse_vps_profile),
+                         "WebSocket 101 upgrade on a guessed path, sparse hosting host"});
 
         int A_hits = 0, B_hits = 0;
         // A-tier rules are the first 8 pushed above (WireGuard, AmneziaWG,

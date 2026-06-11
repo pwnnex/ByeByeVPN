@@ -1,0 +1,700 @@
+# ByeByeVPN
+
+Клиентский сканер детектируемости VPN / DPI / Reality / ТСПУ. Одна
+статическая `byebyevpn.exe` под Windows (работает через Wine на Linux
+и macOS), без прав администратора, без DLL-зависимостей.
+
+```
+ ____             ____           __     ______  _   _
+| __ ) _   _  ___| __ ) _   _  __\ \   / /  _ \| \ | |
+|  _ \| | | |/ _ \  _ \| | | |/ _ \ \ / /| |_) |  \| |
+| |_) | |_| |  __/ |_) | |_| |  __/\ V / |  __/| |\  |
+|____/ \__, |\___|____/ \__, |\___| \_/  |_|   |_| \_|
+       |___/            |___/
+   Full TSPU/DPI/VPN detectability scanner   v2.8.1
+```
+
+**Languages:** [English](#english) · [Русский](#русский) · [简体中文](README.zh-CN.md) · [فارسی](README.fa.md)
+
+**Discussion / report issues:**
+[ntc.party/t/byebyevpn/24325](https://ntc.party/t/byebyevpn/24325) ·
+[GitHub Issues](https://github.com/pwnnex/ByeByeVPN/issues)
+
+<a href="https://nowpayments.io/donation/byebyevpn" target="_blank" rel="noreferrer noopener">
+    <img src="https://nowpayments.io/images/embeds/donation-button-black.svg" alt="Crypto donation button by NOWPayments">
+</a>
+
+---
+
+## English
+
+### Purpose
+
+Given an IP or hostname, run the full Russian OCR методика (§5-10) plus
+modern 2026 tunnel fingerprints against it from an external vantage
+point. Output: a detection score, the identified stack, and what a
+TSPU-class classifier would decide. No VPN connection to the target
+is needed - the scanner looks at the destination as a third-party
+observer, the way an ISP or DPI middlebox sees it.
+
+### Prerequisites (read before scanning)
+
+> **Disable any active VPN / Zapret / proxy on the host running the
+> scanner before you start.** the scanner uses the host's TCP/IP and
+> TLS stack to emit probes. if your host routes through a TUN /
+> sing-box / Zapret / GoodbyeDPI / proxifier, the wire-level signature
+> you measure on the target is **your local stack reflected**, not the
+> target's. specifically:
+>
+> - latency anchors and RTT to anchors will be wrong, breaking SNITCH.
+> - ClientHello bytes may be rewritten by Zapret-style fragmentors,
+>   breaking JA4 calculation.
+> - GeoIP queries will resolve YOUR exit IP, not the lookups you want.
+> - the `local` mode (`byebyevpn local`) is the one place where active
+>   VPN matters in reverse: there the goal IS to inspect your own
+>   adapters, but you still want to scan a remote target with the VPN
+>   off.
+>
+> turn the VPN/proxy off, run the scan, then re-enable. on Windows:
+> kill the v2rayN/sing-box/Zapret process and confirm
+> `Get-NetAdapter` shows no active TUN/WireGuard/Wintun/TAP-style
+> interfaces.
+
+### Pipeline
+
+| # | Module                          | What it does                                                            |
+|---|---------------------------------|-------------------------------------------------------------------------|
+| 1  | DNS resolve                     | A + AAAA, IPv4 preferred                                                |
+| 2  | GeoIP aggregation               | 5 HTTPS-only providers in parallel, ASN + flags                         |
+| 3a | TCP port scan                   | Connect-scan 1-65535 (default) or 205 curated ports, 500 threads        |
+| 3b | TCP stack fingerprint           | Handshake distribution + SIO_TCP_INFO peer window/MSS + closed-port behavior, no admin |
+| 4  | UDP probes                      | WireGuard / AmneziaWG / Hysteria2 handshakes                            |
+| 4b | AmneziaWG S1 deep-probe (v2.6.0)| Junk-prefix size sweep on :51820, recovers the configured S1 parameter  |
+| 5  | Service fingerprint + CT        | SSH, HTTP, TLS + SNI consistency, SOCKS5, CONNECT, Shadowsocks, crt.sh, proxy-header leak |
+| 5b | uTLS dual-probe + JA4 + JA4S    | Two ClientHellos per TLS port (byte-accurate Chrome 131 vs openssl-default), JA4 / JA4S extracted from raw CH/SH bytes, JA4S classified against a backend-stack table |
+| 6  | J3 / TSPU active probing        | 8 probes per TLS port (Reality discriminator)                           |
+| 7  | SNITCH + traceroute + SSTP      | RTT vs GeoIP (methodika §10.1), ICMP hop-count, Microsoft SSTP          |
+| 8  | Verdict + TSPU emulation        | Score 0-100, stack identification, 3-tier TSPU ruling, hardening advice |
+
+### UDP handshakes
+
+v2.6.0 narrowed the UDP set to the modern signature-less tunnels.
+the legacy OpenVPN / IKEv2 / L2TP / TUIC / plain-QUIC / DNS probes were
+removed: those protocols carry fixed-port / fixed-header signatures any
+DPI already catches, so probing for them cost scan time without adding
+detection value for this niche.
+
+| Port       | Protocol           | Payload                                               |
+|------------|--------------------|-------------------------------------------------------|
+| 51820      | WireGuard          | 148-byte MessageInitiation, randomized body           |
+| 51820      | AmneziaWG Sx=8     | Delta-probe: vanilla WG rejected, Sx=8 prefix accepted |
+| 55555      | AmneziaWG Sx=8     | 8-byte junk prefix + WG init                          |
+| 51820      | AmneziaWG S1 sweep | 12-step junk-prefix size sweep, recovers configured S1 |
+| 36712      | Hysteria2          | QUIC v1 Initial, random DCID                          |
+| 443        | Hysteria2          | QUIC v1 Initial on :443                               |
+
+### J3 probes
+
+Eight probe types fired at every TLS-capable port:
+
+1. Empty TCP connect (no bytes)
+2. `GET /` with a real Host header
+3. `CONNECT example.com:443`
+4. Plausible OpenSSH banner
+5. 512 random bytes (via `RAND_bytes`)
+6. TLS ClientHello with random `.invalid` SNI
+7. Absolute-URI proxy-style `GET`
+8. `0xFF × 128`
+
+Reality / XTLS silently drops all 8; regular HTTP returns 400/403. The
+pattern is the diagnostic signal.
+
+### Verdict scale
+
+| Score  | Label          | Meaning                                           |
+|--------|----------------|---------------------------------------------------|
+| 85-100 | `CLEAN`        | Looks like a regular web server                   |
+| 70-84  | `NOISY`        | Suspicious artefacts, not necessarily VPN        |
+| 50-69  | `SUSPICIOUS`   | Multiple red flags                                |
+| < 50   | `OBVIOUSLY VPN`| Trivially detected - obfuscation / stack change needed |
+
+### TSPU emulation
+
+| Tier | Verdict          | Meaning                                                 |
+|------|------------------|---------------------------------------------------------|
+| A≥1  | `IMMEDIATE BLOCK`| Named protocol signature - SYN/handshake dropped        |
+| B≥2  | `BLOCK` (cumul.) | ≥2 soft anomalies - classifier trips block threshold    |
+| B=1  | `THROTTLE / QoS` | 1 soft anomaly - flagged for monitoring / rate-limit    |
+| 0    | `PASS / ALLOW`   | No signatures                                           |
+
+### On-the-wire posture
+
+The tool does not impersonate a browser. Every outbound HTTP request
+(to IP-intel services, to the target during HTTP-over-TLS audit, to
+crt.sh) goes out with zero tool-specific headers.
+
+For `http_get()` - the one used against IP-intel services and
+crt.sh - the request is byte-wise:
+
+```
+GET /path HTTP/1.1
+Host: <host>
+```
+
+No `User-Agent`, no `Accept`, no `Accept-Language`, no
+`Accept-Encoding`, no `Sec-Fetch-*`, no `Upgrade-Insecure-Requests`.
+The endpoints all accept a bare GET - the same way `curl -sS
+https://ipwho.is/8.8.8.8` works without any flags. WinHTTP still
+transparently decompresses gzip'd responses server-side, but we
+don't advertise it.
+
+For `https_probe()` - the target HTTP-over-TLS audit - headers are
+also minimal (`Host`, `Accept: */*`, `Connection: close`).
+
+Earlier versions (v2.5 - v2.5.4) emitted a Chrome-131 header block
+intended to look "browser-like". That was itself a unique static
+fingerprint and has been dropped (see
+[issue #5](https://github.com/pwnnex/ByeByeVPN/issues/5)).
+
+For protocol probes (UDP handshakes, TLS ClientHello, ICMP) every
+field that a real client would randomize is filled via OpenSSL
+`RAND_bytes`: WireGuard MessageInitiation body, AmneziaWG junk prefix +
+WG body, Hysteria2 QUIC DCID, TLS ClientRandom, invalid-SNI prefix.
+
+ICMP traceroute payload is the standard Windows `ping.exe` pattern
+(`abcdefghi...`, 32 bytes) - byte-identical to what any Windows box
+emits.
+
+The uTLS dual-probe (v2.6.0) sends two different ClientHellos per TLS
+port. The "chrome" side is a byte-accurate Chrome 131 ClientHello built
+by hand (`src/scan/chrome_ch.cpp`): GREASE at the spec positions, the
+Chrome extension set in order, a GREASE-prefixed x25519 key_share, the
+padding extension. It is exactly the bytes Chrome sends, not a tweaked
+OpenSSL context, so it carries no tool-identifying bytes - a uTLS
+fingerprint check sees Chrome. The "openssl" side is the default
+OpenSSL ClientHello, same as the existing `tls_probe`. SNI is the
+target's hostname in both. ClientHello / ServerHello bytes stay
+in-process; JA4 / JA4S hashes are computed locally and never
+transmitted. The "chrome accepted, openssl rejected" split is the
+uTLS-enforcement signal.
+
+The TCP stack fingerprint (3b) does not change anything on the wire.
+It runs 6 sequential `SOCK_STREAM` connects to an already-known open
+port, calls `WSAIoctl(SIO_TCP_INFO_v0)` on the local handle, and (if
+asked) tries one connect to a closed port. No raw socket, no admin,
+no extra packet shapes.
+
+### Audit
+
+Grep the modular source tree for tool-identifying strings. Since
+v2.5.8 the source is split across `src/**/*.cpp` and `src/**/*.h`
+under `src/common`, `src/net`, `src/scan`, `src/local`, `src/app`,
+plus `src/main.cpp`. Expected matches: only the `--help` printf in
+`src/app/cli.cpp` (cap is 3 to leave headroom).
+
+```
+$ grep -rnE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' \
+    src --include='*.cpp' --include='*.h'
+src/app/cli.cpp:27:    printf("ByeByeVPN — full TSPU/DPI/VPN ...
+```
+
+None of these reach a socket. The CI workflow
+(`.github/workflows/release.yml`) fails the build if any additional
+match appears, and re-runs the grep across the full tree on every tag.
+
+### Install
+
+Windows: download `byebyevpn-v2.8.1-win64.zip` from
+[Releases](../../releases), extract, run `byebyevpn.exe` - either
+double-click for the interactive menu, or pass an IP/hostname from
+the terminal.
+
+Runtime: Windows 10 1803+ / 11 / Server 2019+. No admin, no DLLs, no
+.NET, no VC++ Redistributable. Internet access for GeoIP and
+CT-log lookups.
+
+Linux / macOS: run through Wine. Everything except `local`
+(host-side adapter enumeration) works identically.
+
+Verify what you downloaded: every release ships a SHA256 in the
+release notes, a CycloneDX SBOM (`byebyevpn-sbom.json`), and -
+when the project signing key is configured - matching `.minisig`
+signatures. See `BUILD.md` for the verify recipe.
+
+### CLI
+
+```bash
+byebyevpn                        # interactive menu
+byebyevpn <host>                 # full scan
+byebyevpn scan 1.2.3.4           # same, explicit
+byebyevpn <host> --json          # full scan, JSON on stdout (v2.6.0)
+byebyevpn ports my.server.ru     # tcp scan only
+byebyevpn udp my.server.ru       # udp probes only
+byebyevpn tls my.server.ru 443   # tls + sni consistency
+byebyevpn j3 my.server.ru 443    # j3 active probing
+byebyevpn geoip 8.8.8.8          # geoip aggregation
+byebyevpn snitch my.server.ru    # rtt vs geo (methodika §10.1)
+byebyevpn trace my.server.ru     # icmp hop-count
+byebyevpn local                  # scan this machine
+byebyevpn audit-config cfg.json  # predict a config's detectability (v2.8.0)
+byebyevpn sweep 1.2.3.0/24       # cluster a subnet by TLS fingerprint (v2.8.0)
+```
+
+A completed full scan exits with the verdict tier so wrapper scripts
+can branch without parsing output (v2.6.0):
+
+```
+0  CLEAN (score >= 85)        2  SUSPICIOUS (50-69)
+1  NOISY (70-84)              3  OBVIOUSLY-VPN (< 50)
+64 usage error (no target)
+```
+
+Hostnames are resolved via `getaddrinfo`; IPv4 is always preferred,
+and the chosen IP is printed in phase [1/8]. On IPv4-only links (RU /
+CIS consumer internet) this avoids the happy-eyeballs AAAA trap where
+an unreachable v6 silently burns every timeout.
+
+### Config audit (pre-deploy, v2.8.0)
+
+`byebyevpn audit-config <file>` runs the verdict engine's signal logic
+**statically against an Xray (v2ray-core) or sing-box JSON config** —
+before you deploy it, with no network and no target. It reuses the same
+brand→ASN table the live scanner uses, so the checks line up one-to-one
+with what a real scan would later find on the wire:
+
+- Reality `dest=` / sing-box `handshake.server` pointing at a major brand
+  (amazon/apple/microsoft/google/cloudflare/yandex/…) — the cert-on-non-
+  owning-ASN tell. **HIGH.**
+- named-protocol defaults: Shadowsocks on :8388/:8488, WireGuard on
+  :51820, Hysteria2 / TUIC inbounds — the A-tier instant-block signatures.
+- plaintext inbounds (`security: none`, ws/grpc without TLS).
+- missing `fallbacks` (the silent-on-junk pattern J3 probes for),
+  `show: true` debug leak, empty/missing Reality `shortIds`, VLESS without
+  `xtls-rprx-vision` flow, and the 3x-ui/x-ui/Marzban panel-port cluster.
+
+Output is a per-finding list (severity + what + how-to-fix) and a
+**predicted TSPU verdict** (`PASS / THROTTLE / BLOCK / IMMEDIATE BLOCK`)
+using the same A/B tiering as a live scan. Exit code mirrors the scan
+tiers: `0 PASS, 1 THROTTLE, 2 BLOCK, 3 IMMEDIATE BLOCK, 64` on a file /
+parse error — so a deploy script can gate on it:
+
+```bash
+byebyevpn audit-config /etc/xray/config.json || { echo "fix the config first"; exit 1; }
+```
+
+The advisor is fully offline and emits nothing on the wire; it only reads
+the JSON file you hand it.
+
+### Port scan modes
+
+```
+--full                    all ports 1-65535 (default)
+--fast                    205 curated VPN / proxy / TLS / admin ports
+--range 8000-9000 ports   port range
+--ports 80,443,8443       explicit list
+```
+
+### Tuning
+
+```
+--threads N       parallel TCP connects      (default 500)
+--tcp-to MS       TCP connect timeout         (default 800)
+--udp-to MS       UDP recv timeout            (default 900)
+--no-color        disable ANSI colors
+-v / --verbose    verbose output
+```
+
+### Stealth / privacy
+
+```
+--stealth         --no-geoip + --no-ct + --udp-jitter, AND adds
+                  inter-probe timing jitter across J3 / SNI consistency /
+                  uTLS dual-probe / AmneziaWG sweep (v2.7.0)
+--no-geoip        skip all HTTPS GeoIP lookups
+--no-ct           skip crt.sh CT-log query
+--udp-jitter      50-300ms random delay between UDP probes
+--j3-subset N     send a random N-probe subset (1..7) of the eight J3
+                  probes per port instead of all eight (v2.7.0)
+--passive         minimal-probe mode: SKIPS J3, uTLS dual-probe, SNI
+                  consistency loop and AmneziaWG S1 sweep entirely. one
+                  base TLS handshake + GeoIP + CT-log + traceroute +
+                  SNITCH only. fewest scanner-shaped patterns on the
+                  wire (v2.7.0)
+```
+
+All default off. Default scan emits the same bytes v2.6.0 emitted.
+
+Anti-fingerprint context: v2.7.0 randomizes the J3 probe order with a
+CSPRNG-backed Fisher-Yates per scan, so the fixed `empty -> GET ->
+CONNECT -> SSH -> rand -> tls-invalid -> abs-URI -> 0xff` sequence is
+no longer on the wire. The Chrome 131 ClientHello randomness also moved
+to `RAND_bytes` (away from `std::mt19937`).
+
+### Save scan output
+
+```
+--save            write the scan to <target>.md in the current directory
+--save <path>     write the scan to <path> (markdown-wrapped)
+```
+
+ANSI colors are stripped from the file; terminal output is unchanged.
+The file is wrapped in a markdown code block so it renders cleanly in
+any md viewer.
+
+### Build
+
+See [BUILD.md](BUILD.md) for full instructions, OpenSSL provenance,
+and SHA256s. Short form:
+
+```bash
+# msys2 UCRT64
+pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-make
+git clone https://github.com/pwnnex/ByeByeVPN.git && cd ByeByeVPN
+make windows-static
+```
+
+Release zips are produced by
+[`.github/workflows/release.yml`](.github/workflows/release.yml) from
+a pinned msys2 image. SHA256 of the exe and zip are printed in each
+release's notes for verification.
+
+### Limitations
+
+- Connect-scan, not SYN-scan. Full TCP handshake seen by the target.
+- Cloudflare WARP / CGNAT / corporate proxies can ACK every port
+  with identical RTT. The tool detects this (>60 ports with RTT
+  variance <80ms) and warns.
+- The uTLS dual-probe sends a byte-accurate Chrome 131 ClientHello
+  (so a strict uTLS-enforcing Reality server accepts it) but the
+  raw-socket path does not run the TLS 1.3 key schedule, so it has
+  no peer cert for the Chrome side - cert-steering detection still
+  relies on the openssl-side handshake. The main `tls_probe` JA3 is
+  still OpenSSL-default; this is noted in the output as an advisory.
+- QUIC probes (v2.8.0) send a real RFC 9001 protected Initial - the
+  Initial key schedule, AEAD payload protection and header protection
+  are byte-exact against the RFC 9001 Appendix A test vectors, and a
+  TLS ClientHello rides in a CRYPTO frame. a QUIC listener decrypts it
+  and answers. the ClientHello does not yet carry the
+  quic_transport_parameters extension, so the probe confirms a QUIC
+  endpoint and captures its response shape, but does not drive a full
+  QUIC handshake to completion.
+- GeoIP providers disagree; `ipapi.is` flags any hosting IP as
+  "VPN". Score is built on behaviour, not on single-source tags.
+
+### License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+Releases up to v2.5.9 were MIT. From v2.6.0 onward the project is
+GPL-3.0-or-later. Old MIT releases keep their MIT grant; nothing is
+revoked retroactively. The relicense was done by the sole copyright
+holder (every commit up to v2.6.0 was authored by pwnnex).
+
+---
+
+## Русский
+
+### Назначение
+
+Получив IP или hostname, программа прогоняет полную методику
+Роскомнадзора (§5-10) + современные 2026 сигнатуры обфусцированных
+туннелей против этой цели, работая как внешний наблюдатель. На выходе:
+score детектируемости, определённый стек, и решение, которое принял
+бы ТСПУ-классификатор. Подключаться к VPN цели не нужно - сканер
+смотрит на неё так же, как видит провайдер или DPI-middlebox.
+
+### Подготовка (читай до запуска)
+
+> **Перед запуском диагностики выключи на хосте любой активный
+> VPN / Zapret / GoodbyeDPI / прокси.** сканер использует TCP/IP и
+> TLS стек хоста чтобы слать пробы. если хост ходит через
+> TUN / sing-box / Zapret-фрагментатор / Proxifier, на проводе ты
+> измеришь не цель, а **отражение собственного локального стека**:
+>
+> - latency-якоря и RTT поедут, SNITCH сломается.
+> - байты ClientHello могут перезаписаться Zapret-style фрагментатором,
+>   JA4 посчитается криво.
+> - GeoIP-запросы вернут твой exit-IP вместо нужного lookup'а.
+> - режим `local` (`byebyevpn local`) - единственное исключение, там
+>   как раз надо смотреть свои адаптеры. но даже в нём для скана
+>   удалённой цели VPN на хосте нужно отключить.
+>
+> алгоритм: вырубить VPN/прокси, прогнать скан, потом включить
+> обратно. на Windows: убить процесс v2rayN/sing-box/Zapret и
+> убедиться через `Get-NetAdapter` что нет активных
+> TUN/WireGuard/Wintun/TAP интерфейсов.
+
+### Пайплайн
+
+| # | Модуль                          | Что делает                                                            |
+|---|---------------------------------|-----------------------------------------------------------------------|
+| 1  | DNS resolve                      | A + AAAA, приоритет IPv4                                              |
+| 2  | GeoIP aggregation                | 5 HTTPS-only провайдеров параллельно, ASN + флаги                     |
+| 3a | TCP port scan                    | Connect-scan 1-65535 (дефолт) или 205 curated, 500 потоков            |
+| 3b | TCP stack fingerprint            | Распределение handshake-времени + SIO_TCP_INFO peer window/MSS + поведение на закрытом порту, без админа |
+| 4  | UDP probes                       | Handshake'и WireGuard / AmneziaWG / Hysteria2                          |
+| 4b | AmneziaWG S1 deep-probe (v2.6.0) | Sweep размера junk-prefix на :51820, восстанавливает настроенный S1    |
+| 5  | Service fingerprint + CT         | SSH, HTTP, TLS + SNI consistency, SOCKS5, CONNECT, Shadowsocks, crt.sh, proxy-headers |
+| 5b | uTLS dual-probe + JA4 + JA4S     | По два ClientHello на TLS-порт (байт-в-байт Chrome 131 vs openssl-default), JA4 / JA4S из захваченных байт CH/SH, JA4S классифицируется по таблице стеков |
+| 6  | J3 / ТСПУ active probing         | 8 probe'ов на каждый TLS-порт (Reality discriminator)                 |
+| 7  | SNITCH + traceroute + SSTP       | RTT vs GeoIP (§10.1), ICMP hop-count, Microsoft SSTP                  |
+| 8  | Verdict + эмуляция ТСПУ          | Score 0-100, определение стека, 3-tier вердикт ТСПУ, hardening        |
+
+### UDP handshake'и
+
+v2.6.0 сузил UDP-набор до современных signature-less туннелей. legacy
+пробы OpenVPN / IKEv2 / L2TP / TUIC / plain-QUIC / DNS убраны: эти
+протоколы несут fixed-port / fixed-header сигнатуры, которые любой DPI
+и так ловит, так что probe'инг по ним съедал время скана не давая
+детект-ценности для этой ниши.
+
+| Порт      | Протокол           | Payload                                              |
+|-----------|--------------------|------------------------------------------------------|
+| 51820     | WireGuard          | 148-байтный MessageInitiation, рандомное тело        |
+| 51820     | AmneziaWG Sx=8     | Двойная проба: vanilla WG отвергается, Sx=8 принят   |
+| 55555     | AmneziaWG Sx=8     | 8-байт junk-prefix + WG init                         |
+| 51820     | AmneziaWG S1 sweep | Sweep из 12 размеров junk-prefix, восстанавливает S1 |
+| 36712     | Hysteria2          | QUIC v1 Initial, рандомный DCID                      |
+| 443       | Hysteria2          | QUIC v1 Initial на :443                              |
+
+### J3 probe'ы
+
+Восемь probe-типов на каждый TLS-порт:
+
+1. Пустой TCP (ничего не шлём)
+2. `GET /` с реальным Host-заголовком
+3. `CONNECT example.com:443`
+4. Плаузабельный OpenSSH-баннер
+5. 512 байт `RAND_bytes`
+6. TLS ClientHello с рандомным `.invalid` SNI
+7. HTTP absolute-URI (proxy-style)
+8. `0xFF × 128`
+
+Reality / XTLS молча дропает все 8; обычный HTTP-сервер отвечает
+400/403. Сам паттерн и есть сигнал.
+
+### Шкала verdict
+
+| Score  | Label           | Смысл                                                  |
+|--------|-----------------|--------------------------------------------------------|
+| 85-100 | `CLEAN`         | Выглядит как обычный веб-сервер                        |
+| 70-84  | `NOISY`         | Подозрительные артефакты, не обязательно VPN           |
+| 50-69  | `SUSPICIOUS`    | Несколько красных флагов                               |
+| < 50   | `OBVIOUSLY VPN` | Палится сразу - нужна обфускация / смена стека         |
+
+### Вердикт ТСПУ
+
+| Tier | Вердикт          | Что это значит                                          |
+|------|------------------|---------------------------------------------------------|
+| A≥1  | `IMMEDIATE BLOCK`| Named-протокол - SYN/handshake дропается                |
+| B≥2  | `BLOCK` (cumul.) | ≥2 soft-аномалии - классификатор пересекает порог       |
+| B=1  | `THROTTLE / QoS` | 1 soft-аномалия - флаг на мониторинг / rate-limit       |
+| 0    | `PASS / ALLOW`   | Нет сигнатур                                            |
+
+### Как тулза выглядит на проводе
+
+Программа не притворяется браузером. Каждый исходящий HTTP-запрос (к
+IP-intel сервисам, к target при HTTP-over-TLS аудите, к crt.sh)
+уходит **без** tool-specific заголовков.
+
+Для `http_get()` - функция которая ходит в IP-intel и crt.sh -
+запрос побайтово выглядит так:
+
+```
+GET /path HTTP/1.1
+Host: <host>
+```
+
+Никаких `User-Agent`, `Accept`, `Accept-Language`, `Accept-Encoding`,
+`Sec-Fetch-*`, `Upgrade-Insecure-Requests`. Эти endpoint'ы принимают
+голый GET - так же как работает `curl -sS https://ipwho.is/8.8.8.8`
+без дополнительных флагов. WinHTTP всё равно прозрачно распакует
+gzip если сервер выберет его сам, но мы не анонсируем поддержку.
+
+Для `https_probe()` - аудит target'а через HTTP-over-TLS - хедеры
+тоже минимальные (`Host`, `Accept: */*`, `Connection: close`).
+
+Предыдущие версии (v2.5 - v2.5.4) отправляли блок заголовков "как
+Chrome 131", чтобы "выглядеть как браузер". Это само по себе было
+уникальным статическим fingerprint'ом и удалено (см.
+[issue #5](https://github.com/pwnnex/ByeByeVPN/issues/5)).
+
+Для protocol-probe'ов (UDP handshake'и, TLS ClientHello, ICMP) каждое
+поле, которое реальный клиент рандомизирует, заполняется через
+OpenSSL `RAND_bytes`: тело WireGuard MessageInitiation, junk-prefix +
+WG-тело AmneziaWG, Hysteria2 QUIC DCID, TLS ClientRandom, префикс
+invalid-SNI.
+
+ICMP traceroute шлёт стандартный Windows `ping.exe` payload
+(`abcdefghi...`, 32 байта) - байт-в-байт то же, что и любой
+Windows-клиент.
+
+### Аудит
+
+Грепнуть исходник на tool-identifying строки. Ожидаются только три
+совпадения, ни одно из которых не уходит в сеть:
+
+```
+$ grep -nE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' src/byebyevpn.cpp
+1:     // ByeByeVPN - full VPN / proxy / Reality detectability analyzer
+...    // коммент в http_get про scrub
+...    // printf в --help
+```
+
+CI workflow (`.github/workflows/release.yml`) проваливает сборку при
+любом дополнительном совпадении.
+
+### Установка
+
+Windows: скачать `byebyevpn-v2.8.1-win64.zip` со страницы
+[Releases](../../releases), распаковать, запустить `byebyevpn.exe`
+(двойной клик = интерактивное меню, либо IP/hostname из терминала).
+
+Требования: Windows 10 1803+ / 11 / Server 2019+. Прав администратора
+не нужно. DLL не нужно. Интернет - для GeoIP и CT-log.
+
+Linux / macOS: через Wine. Всё кроме `local` (адаптеры хоста)
+работает идентично.
+
+Проверка скачанного: каждый релиз идёт с SHA256 в release notes,
+CycloneDX-SBOM (`byebyevpn-sbom.json`) и - когда выставлен ключ
+подписи проекта - с `.minisig` подписями. Рецепт верификации в
+`BUILD.md`.
+
+### CLI
+
+```bash
+byebyevpn                        # интерактивное меню
+byebyevpn <host>                 # полный скан
+byebyevpn scan 1.2.3.4           # то же, явно
+byebyevpn <host> --json          # полный скан, JSON в stdout (v2.6.0)
+byebyevpn ports my.server.ru     # только tcp
+byebyevpn udp my.server.ru       # только udp
+byebyevpn tls my.server.ru 443   # TLS + SNI consistency
+byebyevpn j3 my.server.ru 443    # J3 active probing
+byebyevpn geoip 8.8.8.8          # GeoIP
+byebyevpn snitch my.server.ru    # RTT vs geo (§10.1)
+byebyevpn trace my.server.ru     # ICMP hop-count
+byebyevpn local                  # сканировать свою машину
+byebyevpn audit-config cfg.json  # детектируемость конфига до деплоя (v2.8.0)
+byebyevpn sweep 1.2.3.0/24       # кластеризация подсети по TLS-отпечатку (v2.8.0)
+```
+
+Завершённый full scan выходит с кодом по уровню вердикта, чтобы
+обёртки могли ветвиться без парсинга вывода (v2.6.0):
+
+```
+0  CLEAN (score >= 85)        2  SUSPICIOUS (50-69)
+1  NOISY (70-84)              3  OBVIOUSLY-VPN (< 50)
+64 ошибка использования (нет цели)
+```
+
+Hostname резолвится через `getaddrinfo`; IPv4 выбирается всегда, а
+выбранный IP печатается в фазе [1/8]. На IPv4-only каналах (РФ / СНГ)
+это чинит баг happy-eyeballs, когда недоступный IPv6 тихо съедал
+весь timeout.
+
+### Режимы TCP-скана
+
+```
+--full                    все порты 1-65535 (дефолт)
+--fast                    205 curated VPN / proxy / TLS / admin
+--range 8000-9000 ports   диапазон
+--ports 80,443,8443       явный список
+```
+
+### Тюнинг
+
+```
+--threads N       параллельных TCP-connect'ов  (default 500)
+--tcp-to MS       TCP connect timeout           (default 800)
+--udp-to MS       UDP recv timeout              (default 900)
+--no-color        без ANSI-цветов
+-v / --verbose    подробный вывод
+```
+
+### Stealth / приватность
+
+```
+--stealth         --no-geoip + --no-ct + --udp-jitter, и плюс
+                  inter-probe timing jitter по J3 / SNI consistency /
+                  uTLS dual-probe / AmneziaWG sweep (v2.7.0)
+--no-geoip        не дёргать HTTPS GeoIP-провайдеров
+--no-ct           не дёргать crt.sh
+--udp-jitter      50-300ms случайная задержка между UDP probe'ами
+--j3-subset N     отправить N (1..7) случайных проб из восьми J3 на порт
+                  вместо всех восьми (v2.7.0)
+--passive         минимальный профиль: ПРОПУСКАЕТ J3, uTLS dual-probe,
+                  SNI consistency и AmneziaWG sweep целиком. только
+                  один TLS handshake + GeoIP + CT + traceroute + SNITCH.
+                  меньше всего scanner-образных паттернов на проводе
+                  (v2.7.0)
+```
+
+Все по умолчанию OFF. Дефолтный скан шлёт ровно то же что v2.6.0.
+
+Анти-фингерпринт контекст: v2.7.0 рандомизирует порядок J3-проб через
+CSPRNG-Fisher-Yates per scan, фиксированной последовательности `empty
+-> GET -> CONNECT -> SSH -> rand -> tls-invalid -> abs-URI -> 0xff` на
+проводе больше нет. Рандом в Chrome 131 ClientHello тоже переехал на
+`RAND_bytes` (с `std::mt19937`).
+
+### Сохранение результата в файл
+
+```
+--save            записать скан в <target>.md в текущей папке
+--save <path>     записать скан в <path> (тоже как markdown)
+```
+
+ANSI-цвета вырезаются при записи в файл; вывод в терминале не меняется.
+Содержимое обёрнуто в markdown code-block, так что файл нормально
+открывается в любом md-вьювере.
+
+### Сборка
+
+Смотрите [BUILD.md](BUILD.md) - полные инструкции, provenance OpenSSL,
+SHA256. Коротко:
+
+```bash
+# msys2 UCRT64
+pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-make
+git clone https://github.com/pwnnex/ByeByeVPN.git && cd ByeByeVPN
+make windows-static
+```
+
+Релизные zip собираются через
+[`.github/workflows/release.yml`](.github/workflows/release.yml) из
+pinned msys2 образа. SHA256 exe и zip печатаются в release notes
+для верификации.
+
+### Ограничения
+
+- Connect-scan, не SYN-scan. Target видит полный TCP handshake.
+- Cloudflare WARP / CGNAT / корпоративный proxy могут ACK'ать любой
+  порт с одинаковым RTT. Программа детектит это (>60 портов с
+  variance < 80 мс) и выводит warning.
+- uTLS dual-probe шлёт байт-в-байт точный Chrome 131 ClientHello
+  (поэтому Reality с жёстким uTLS-enforcement его примет), но
+  raw-socket путь не гоняет TLS 1.3 key schedule, так что для
+  Chrome-стороны нет сертификата peer'а - детект cert-steering
+  всё ещё опирается на openssl-handshake. JA3 основного `tls_probe`
+  по-прежнему OpenSSL-default, отмечено в выводе как advisory.
+- QUIC-пробы (v2.8.0) шлют настоящий защищённый Initial по RFC 9001 -
+  key schedule, AEAD-защита payload и header protection байт-в-байт
+  совпадают с тест-векторами RFC 9001 Appendix A, а внутри CRYPTO-фрейма
+  едет TLS ClientHello. QUIC-сервер расшифровывает его и отвечает. В
+  ClientHello пока нет расширения quic_transport_parameters, так что
+  проба подтверждает QUIC-эндпоинт и снимает форму ответа, но не
+  доводит полный QUIC-handshake до конца.
+- GeoIP-провайдеры часто несогласны друг с другом; `ipapi.is` метит
+  любой hosting-IP как VPN. Score построен на поведении, а не на
+  single-source флагах.
+
+### Лицензия
+
+GPL-3.0-or-later. См. [LICENSE](LICENSE) и [NOTICE](NOTICE).
+
+Релизы до v2.5.9 включительно были под MIT. С v2.6.0 проект под
+GPL-3.0-or-later. Старые MIT-релизы сохраняют свою MIT-лицензию,
+ретроактивно ничего не отзывается. Релиценз сделан единоличным
+правообладателем (все коммиты до v2.6.0 написаны pwnnex).

@@ -13,6 +13,7 @@
 #include "scan/sni.h"
 #include "scan/j3.h"
 #include "scan/grpc.h"
+#include "scan/dpi_probe.h"
 #include "scan/snitch.h"
 #include "geoip/geoip.h"
 #include "local/local.h"
@@ -116,7 +117,7 @@ int main(int argc, char** argv) {
                 static const set<string> cmds = {
                     "scan","full","ports","udp","tls","j3","geoip",
                     "snitch","trace","traceroute","local","me","self","help",
-                    "audit-config","audit","sweep","grpc"
+                    "audit-config","audit","sweep","grpc","dpi"
                 };
                 if (pos.size() >= 2 && cmds.count(pos[0])) target = pos[1];
                 else                                       target = pos[0];
@@ -310,6 +311,25 @@ int main(int argc, char** argv) {
                    gp.headers_resp ? "yes" : "no", gp.stream_reset ? "yes" : "no",
                    gp.goaway ? "yes" : "no");
             printf("  => %s\n", gp.note.c_str());
+        } else if (cmd == "dpi") {
+            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
+            int port = pos.size() >= 3 ? std::atoi(pos[2].c_str()) : 443;
+            auto rs = resolve_host(pos[1]);
+            string ip = rs.primary_ip.empty() ? pos[1] : rs.primary_ip;
+            DpiProbe d = dpi_probe(ip, port, pos[1]);
+            printf("  target=%s  sni=%s\n", ip.c_str(), pos[1].c_str());
+            if (d.tunneled) {
+                printf("  %s!! %s%s\n", col(C::YEL), d.note.c_str(), col(C::RST));
+                rc = 64; goto done;
+            }
+            auto state = [](bool reset, bool prog){ return reset ? "RESET" : (prog ? "ok" : "no-reply"); };
+            printf("  target-SNI: %-8s   benign-SNI: %-8s\n",
+                   state(d.target_reset, d.target_progressed),
+                   state(d.benign_reset, d.benign_progressed));
+            if (d.frag_tested)
+                printf("  fragmented CH: %s\n", d.frag_evades ? "EVADES (got through)" : "still reset");
+            printf("  => %s\n", d.note.c_str());
+            rc = d.sni_blocked ? 2 : 0;
         } else if (cmd == "audit-config" || cmd == "audit") {
             if (pos.size() < 2) { printf("need a config file path\n"); rc = 64; goto done; }
             rc = run_config_audit(pos[1]);

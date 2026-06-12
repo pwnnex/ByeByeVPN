@@ -95,6 +95,6 @@ void banner() {
     tee_puts("|____/ \\__, |\\___|____/ \\__, |\\___| \\_/  |_|   |_| \\_|");
     tee_puts("       |___/            |___/                          ");
     tee_printf("%s", col(C::RST));
-    tee_printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.8.1%s\n\n",
+    tee_printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.8.2%s\n\n",
                col(C::DIM), col(C::RST));
 }

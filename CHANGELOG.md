@@ -1,5 +1,41 @@
 # Changelog
 
+## v2.8.2 - 2026-06-11
+
+a security/correctness patch + one new probe.
+
+### new: `dpi` - active SNI-RST path probe
+
+`byebyevpn dpi <host> [port]` measures interference between YOU and the host
+(your ISP / TSPU), not the host's own detectability. it opens two TLS
+connections to the same target IP, one carrying the target SNI and one a benign
+baseline SNI; a reset on the target SNI while the benign one completes means
+active SNI-based RST injection on your path. if SNI-RST is seen, a best-effort
+follow-up splits the ClientHello across TCP segments inside the hostname (the
+Zapret / GoodbyeDPI evasion) to see whether fragmentation defeats it. guards
+against a misleading "clean" result when a fake-IP VPN is active: a resolved
+198.18.x / CGNAT / class-E address means traffic is tunneled, so the probe says
+so and tells you to disable the VPN for a real test.
+
+### fix: code-audit findings (memory safety + resource leaks)
+
+a multi-agent code audit (adversarially verified) surfaced and fixed:
+
+- **QUIC length underflow** (`quic.cpp`): `quic_unprotect_client_initial`
+  computed `ct_len = length_val - pn_len` on an unchecked wire varint; a
+  `length_val < pn_len` underflowed `size_t` into a multi-gigabyte vector
+  allocation / OOB. now rejected, with a regression test. (latent - only the
+  test round-trip reaches it today - but hardened.)
+- **unchecked `SSL_new` / `SSL_CTX_new`** across five TLS probes
+  (`fingerprint.cpp` sstp, `grpc.cpp`, `https_probe.cpp`, `tls.cpp`,
+  `transport_probe.cpp`): on an OpenSSL allocation failure or a null shared
+  ctx, each leaked the socket and called `SSL_set_fd` / `SSL_set_tlsext_host_name`
+  on `nullptr` (UB). all now null-check and clean up.
+- **DPI SNI-fragmentation off-by-one**: the split now rounds up so a 1-char SNI
+  still leaves a byte in the first segment.
+
+77 unit tests / 3301 assertions green under `-Werror`; cppcheck clean.
+
 ## v2.8.1 - 2026-06-11
 
 a correctness patch.

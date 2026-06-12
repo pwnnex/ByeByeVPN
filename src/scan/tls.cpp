@@ -40,7 +40,8 @@ TlsProbe tls_probe(const string& ip, int port, const string& sni,
     if (s == INVALID_SOCKET) { r.err = err; return r; }
 
     SSL_CTX* ctx = shared_tls_client_ctx();
-    SSL* ssl = SSL_new(ctx);
+    SSL* ssl = ctx ? SSL_new(ctx) : nullptr;
+    if (!ssl) { closesocket(s); r.err = "ssl alloc"; return r; }
     SSL_set_fd(ssl, (int)s);
     if (!sni.empty()) SSL_set_tlsext_host_name(ssl, sni.c_str());
 

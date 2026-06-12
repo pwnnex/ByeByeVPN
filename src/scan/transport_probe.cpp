@@ -27,7 +27,8 @@ string tls_round_trip(const string& ip, int port, const string& sni,
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv));
 
     SSL_CTX* ctx = shared_tls_client_ctx();
-    SSL* ssl = SSL_new(ctx);
+    SSL* ssl = ctx ? SSL_new(ctx) : nullptr;
+    if (!ssl) { closesocket(s); return {}; }
     SSL_set_fd(ssl, (int)s);
     if (!sni.empty()) SSL_set_tlsext_host_name(ssl, sni.c_str());
     static const unsigned char alpn_h11[] = {8,'h','t','t','p','/','1','.','1'};

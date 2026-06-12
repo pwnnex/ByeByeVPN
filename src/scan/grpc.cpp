@@ -67,6 +67,7 @@ GrpcProbe grpc_probe(const string& ip, int port, const string& sni, int to_ms) {
     if (!ctx) { closesocket(s); r.err = "ctx"; return r; }
     SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
     SSL* ssl = SSL_new(ctx);
+    if (!ssl) { SSL_CTX_free(ctx); closesocket(s); r.err = "ssl alloc"; return r; }
     SSL_set_fd(ssl, (int)s);
     if (!sni.empty()) SSL_set_tlsext_host_name(ssl, sni.c_str());
     SSL_set_alpn_protos(ssl, ALPN_H2, sizeof(ALPN_H2));

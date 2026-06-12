@@ -43,7 +43,7 @@ ChResult send_ch(const string& ip, int port, const string& sni, bool fragment, i
         if (!sni.empty()) {
             for (size_t i = 0; i + sni.size() <= rec.size(); ++i)
                 if (std::memcmp(rec.data() + i, sni.data(), sni.size()) == 0) {
-                    split = i + sni.size() / 2;   // straddle the hostname
+                    split = i + (sni.size() + 1) / 2;   // straddle (round up so 1+ byte stays in seg 1)
                     break;
                 }
         }

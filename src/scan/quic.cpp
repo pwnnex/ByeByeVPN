@@ -297,6 +297,10 @@ bool quic_unprotect_client_initial(const vector<uint8_t>& dg, const vector<uint8
 
     // payload spans length_val bytes from pn_offset (pn + ciphertext + tag).
     if (pn_offset + (size_t)length_val > dg.size()) return false;
+    // length_val is an unchecked wire varint; if it is < pn_len the unsigned
+    // subtraction below would underflow into a huge ct_len and try to build a
+    // multi-gigabyte vector (OOB / DoS). reject the malformed packet.
+    if ((size_t)length_val < (size_t)pn_len) return false;
     size_t ct_start = pn_offset + (size_t)pn_len;
     size_t ct_len = (size_t)length_val - (size_t)pn_len;
     vector<uint8_t> ct_tag(dg.begin() + ct_start, dg.begin() + ct_start + ct_len);

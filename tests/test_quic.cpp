@@ -184,3 +184,21 @@ TEST_CASE("real QUIC ClientHello round-trips through build/unprotect") {
     REQUIRE(quic_unprotect_client_initial(dg, dcid, recovered));
     CHECK(recovered == ch);
 }
+
+// audit regression: a Length varint smaller than the packet-number length used
+// to underflow `ct_len = length_val - pn_len` into a huge size_t and try to
+// build a multi-gigabyte vector. it must now be rejected cleanly (no crash).
+TEST_CASE("quic_unprotect rejects Length < pn_len without underflow") {
+    std::vector<uint8_t> dcid = hx("0001020304050607");   // 8-byte DCID
+    std::vector<uint8_t> scid = hx("0a0b0c0d");            // 4-byte SCID
+    std::vector<uint8_t> crypto;
+    for (int i = 0; i < 200; ++i) crypto.push_back((uint8_t)i);
+    auto dg = quic_build_client_initial(dcid, scid, crypto, 1);
+    REQUIRE(dg.size() >= 1200);
+    // the 2-byte Length varint sits at offset 20:
+    //   1 first-byte + 4 version + (1+8) DCID + (1+4) SCID + 1 token-len(=0)
+    // overwrite it to encode value 1, which is < the 4-byte packet number.
+    dg[20] = 0x40; dg[21] = 0x01;
+    std::vector<uint8_t> out;
+    CHECK_FALSE(quic_unprotect_client_initial(dg, dcid, out));   // must not crash
+}

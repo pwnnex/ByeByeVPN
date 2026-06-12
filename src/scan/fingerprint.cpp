@@ -172,8 +172,10 @@ FpResult sstp_probe(const string& host, int port) {
     string err; SOCKET s = tcp_connect(host, port, g_tcp_to, err);
     if (s == INVALID_SOCKET) { f.silent = true; return f; }
     SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+    if (!ctx) { closesocket(s); f.details = "SSL ctx alloc failed"; f.silent = true; return f; }
     SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
     SSL* ssl = SSL_new(ctx);
+    if (!ssl) { SSL_CTX_free(ctx); closesocket(s); f.details = "SSL alloc failed"; f.silent = true; return f; }
     SSL_set_fd(ssl, (int)s);
     SSL_set_tlsext_host_name(ssl, host.c_str());
     if (SSL_connect(ssl) != 1) {

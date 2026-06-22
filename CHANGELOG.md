@@ -1,5 +1,61 @@
 # Changelog
 
+## v2.8.3 - unreleased
+
+### new: `ech` — DNS HTTPS-RR / ECH probe
+
+`byebyevpn ech <domain>` queries the domain's DNS HTTPS resource record
+(type 65) over DoH and reports what it advertises: ALPN (is HTTP/3 offered?),
+IP hints, and crucially the `ech` SvcParam — the ECHConfigList that enables
+Encrypted ClientHello. ECH hides the SNI from on-path DPI, so an ECH-advertising
+domain is harder to SNI-filter; conversely TSPU has been observed RST-ing
+ECH-carrying handshakes, which makes "does this domain advertise ECH" a real
+signal either way.
+
+- the presentation-form parser (`ech_parse`) is pure and unit-tested; it now
+  also decodes the RFC 3597 generic form (`\# <len> <hex>`), so a resolver that
+  treats HTTPS as an unknown type still yields a correct verdict (a full binary
+  SVCB/HTTPS RDATA walk: alpn / ipv4hint / ipv6hint / ech).
+- the DoH fetch tries Google first, then falls back to Cloudflare
+  (`Accept: application/dns-json`) when Google is unreachable or blocked — so the
+  probe still works on a censored network, where `dns.google` is a common
+  casualty. the fallback fires only on a transport failure, not on a clean
+  "no HTTPS RR" answer.
+- a bare IP argument is rejected up front (an HTTPS RR is keyed on a hostname).
+- 8 parser unit tests covering presentation, generic, and boundary cases.
+
+### removed: NaiveProxy / forward-proxy detection (false positives)
+
+the `naive_probe` transport detector — a proxy-style absolute-URI request over
+TLS that flagged a `407 Proxy-Authenticate` as a NaiveProxy / Caddy
+`forward_proxy` signature — is gone. it tripped on ordinary forward proxies and
+auth-gated origins that have nothing to do with a censorship-evasion tunnel, so
+the signal was not specific enough to carry a score penalty or a TSPU rule. it
+is removed from the scan pipeline, the verdict engine (the B-tier weight-18
+flag), and the TSPU rule set. the WebSocket transport probe (`ws_probe`) is
+unchanged.
+
+### fix: brand-impersonation false positive on cloud-hosted brands
+
+scanning a brand's own domain that is served from a cloud / CDN ASN the brand
+doesn't directly own (e.g. `byebyevpn netflix.com`, where netflix.com is on AWS)
+falsely tripped the Reality `dest=` cert-cloning detector — cert says
+"netflix.com", ASN says "Amazon", so the brand≠ASN heuristic fired and the
+verdict came back OBVIOUSLY-VPN / "Xray VLESS+Reality". but we *asked* for
+netflix.com and got netflix.com's cert: that is the legitimate origin, not a
+clone. the impersonation / Reality-passthrough tells are now gated on
+`brand_impersonated()` — a single predicate (`brand claimed` + ASN data present
++ ASN doesn't own + **the scanned host is not itself that brand**) applied at
+every site that derived the signal (score penalty, role label, DPI matrix, TSPU
+rule). cert-cloning by a non-brand host (the real attack: scanning a VPS/IP that
+presents a netflix.com cert) is unaffected.
+
+### misc
+
+- `http_get` gained an optional `Accept` header, used only by the Cloudflare DoH
+  fallback; every other caller stays a header-free bare GET (on-the-wire posture
+  unchanged).
+
 ## v2.8.2 - 2026-06-11
 
 a security/correctness patch + one new probe.

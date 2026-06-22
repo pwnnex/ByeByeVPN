@@ -41,6 +41,8 @@ SRC := \
     src/scan/grpc.cpp \
     src/scan/transport_probe.cpp \
     src/scan/dpi_probe.cpp \
+    src/scan/ech.cpp \
+    src/scan/ech_query.cpp \
     src/local/local.cpp \
     src/app/target.cpp \
     src/app/orchestrator.cpp \
@@ -125,6 +127,7 @@ TEST_SRC := \
     tests/test_config_audit.cpp \
     tests/test_quic.cpp \
     tests/test_sweep.cpp \
+    tests/test_ech.cpp \
     src/common/util.cpp \
     src/common/tspu.cpp \
     src/common/json.cpp \
@@ -134,6 +137,7 @@ TEST_SRC := \
     src/scan/brand.cpp \
     src/scan/ports.cpp \
     src/scan/quic.cpp \
+    src/scan/ech.cpp \
     src/app/config_audit.cpp \
     src/app/sweep_core.cpp \
     src/common/config.cpp

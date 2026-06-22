@@ -9,7 +9,7 @@
 using std::string;
 using std::vector;
 
-HttpResp http_get(const string& url, int timeout_ms) {
+HttpResp http_get(const string& url, int timeout_ms, const string& accept) {
     HttpResp r;
     auto t0 = std::chrono::steady_clock::now();
     URL_COMPONENTS u{}; u.dwStructSize = sizeof(u);
@@ -36,7 +36,17 @@ HttpResp http_get(const string& url, int timeout_ms) {
                                       WINHTTP_NO_REFERER,
                                       WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hR) { r.err = "req"; WinHttpCloseHandle(hC); WinHttpCloseHandle(hS); return r; }
-    if (!WinHttpSendRequest(hR, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+    // optional Accept header (content-negotiating endpoints only; empty for the
+    // bare-GET callers). -1L length tells WinHTTP to measure the string itself.
+    LPCWSTR hdr_ptr = WINHTTP_NO_ADDITIONAL_HEADERS;
+    DWORD   hdr_len = 0;
+    std::wstring hdrs;
+    if (!accept.empty()) {
+        hdrs = s2ws("Accept: " + accept + "\r\n");
+        hdr_ptr = hdrs.c_str();
+        hdr_len = (DWORD)-1L;
+    }
+    if (!WinHttpSendRequest(hR, hdr_ptr, hdr_len,
                             WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
         !WinHttpReceiveResponse(hR, nullptr)) {
         r.err = "io " + std::to_string(GetLastError());

@@ -56,6 +56,8 @@ set(BBVPN_SOURCES
     src/scan/grpc.cpp
     src/scan/transport_probe.cpp
     src/scan/dpi_probe.cpp
+    src/scan/ech.cpp
+    src/scan/ech_query.cpp
 
     src/local/local.cpp
 

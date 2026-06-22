@@ -290,7 +290,6 @@ FullReport run_full_target(const string& target) {
     // ---- 5) Fingerprint per open TCP port ------------------------------
     printf("\n%s[5/8] Service fingerprints per open port%s\n", col(C::BOLD), col(C::RST));
     vector<int> grpc_h2only_ports;   // h2-only origins that reject plain HTTP/gRPC path
-    vector<std::pair<int,string>> naive_ports;   // (port, Proxy-Authenticate) NaiveProxy/forward-proxy
     vector<std::pair<int,string>> ws_ports;      // (port, path) VLESS/VMess-WebSocket
     auto is_tls_port = [](int p){
         return p==443||p==4433||p==4443||p==8443||p==8080||p==8843||p==8444
@@ -498,8 +497,8 @@ FullReport run_full_target(const string& target) {
                     }
                 }
 
-                // VLESS/VMess-WebSocket + NaiveProxy/forward-proxy transport
-                // probes (one TLS handshake each; skipped under --passive).
+                // VLESS/VMess-WebSocket transport probe (one TLS handshake;
+                // skipped under --passive).
                 if (!g_passive) {
                     WsProbe wp = ws_probe(R.dns.primary_ip, o.port, R.dns.host);
                     if (wp.ws_upgrade) {
@@ -507,13 +506,6 @@ FullReport run_full_target(const string& target) {
                                col(C::DIM), col(C::RST), col(C::YEL),
                                wp.path_hit.c_str(), col(C::RST));
                         ws_ports.push_back({o.port, wp.path_hit});
-                    }
-                    NaiveProbe np = naive_probe(R.dns.primary_ip, o.port, R.dns.host);
-                    if (np.proxy_auth_required) {
-                        printf("        %sforward-proxy:%s %s407 Proxy-Authenticate over TLS%s — NaiveProxy / Caddy forward_proxy signature  %s%s%s\n",
-                               col(C::DIM), col(C::RST), col(C::RED), col(C::RST),
-                               col(C::DIM), printable_prefix(np.proxy_authenticate, 40).c_str(), col(C::RST));
-                        naive_ports.push_back({o.port, np.proxy_authenticate});
                     }
                 }
             } else {
@@ -891,6 +883,24 @@ FullReport run_full_target(const string& target) {
     vector<string> asn_orgs_all;
     for (auto& g: R.geos) if (!g.asn_org.empty()) asn_orgs_all.push_back(g.asn_org);
 
+    // a cert/Server-header that claims brand B from an ASN that does NOT own B is
+    // the Reality `dest=` cert-cloning tell — EXCEPT when we deliberately scanned
+    // B's own domain. brands legitimately serve their own certs from cloud / CDN
+    // ASNs they don't directly own (netflix.com on AWS, a brand behind Cloudflare,
+    // etc.), so scanning the brand's own hostname must NOT read as impersonation.
+    // brand_impersonated() bundles every gate the impersonation sites need:
+    // a non-empty brand, ASN data present, the ASN not owning the brand, and the
+    // scanned host not being that brand.
+    const string host_brand = cert_claims_brand(R.dns.host, {});
+    auto scanned_host_is_brand = [&](const string& brand) {
+        return !brand.empty() && host_brand == brand;
+    };
+    auto brand_impersonated = [&](const string& brand) {
+        return !brand.empty() && !asn_orgs_all.empty()
+            && !asn_owns_brand(brand, asn_orgs_all)
+            && !scanned_host_is_brand(brand);
+    };
+
     for (auto& pf: R.fps) {
         if (pf.tls && pf.tls->ok) {
             any_tls = true;
@@ -957,6 +967,11 @@ FullReport run_full_target(const string& target) {
                      " is for brand '" + pf.sni->brand_claimed +
                      "' but no ASN/GeoIP data is available (--no-geoip or lookups failed) — "
                      "cannot check brand ownership, so impersonation is NOT asserted");
+            } else if (scanned_host_is_brand(pf.sni->brand_claimed)) {
+                note("brand-own-domain", "cert on :" + std::to_string(pf.port) +
+                     " is for brand '" + pf.sni->brand_claimed + "', the very domain we scanned"
+                     " — a brand serving its own cert from a cloud/CDN ASN it doesn't directly"
+                     " own is the legitimate origin, not Reality cert-cloning");
             } else if (!asn_owns_brand(pf.sni->brand_claimed, asn_orgs_all)) {
                 flag_major("cert on :" + std::to_string(pf.port) +
                            " vouches for brand '" + pf.sni->brand_claimed +
@@ -970,33 +985,40 @@ FullReport run_full_target(const string& target) {
             }
         }
         if (pf.sni && pf.sni->reality_like) {
-            any_reality = true;
-            ++reality_port_count;
-            if (pf.sni->passthrough_mode) {
-                flag_major("Reality in passthrough mode on :" + std::to_string(pf.port) +
-                           " (base cert is for '" + pf.sni->matched_foreign_sni +
-                           "' — stream tunnelled to the real brand, SNI-based vhost routing "
-                           "then returns different certs per SNI; cert + ASN disagree)", 14);
+            // suppress the passthrough tell when we scanned the brand's own
+            // domain — per-SNI cert variation on a brand's CDN is its own
+            // multi-tenant front, not a Reality `dest=` tunnel.
+            if (pf.sni->passthrough_mode && scanned_host_is_brand(pf.sni->brand_claimed)) {
+                note("reality-own-brand", "cert on :" + std::to_string(pf.port) +
+                     " varies per SNI with a base cert for '" + pf.sni->brand_claimed +
+                     "', but that is the domain we scanned — the brand's own multi-tenant TLS /"
+                     " CDN front, not Reality passthrough");
             } else {
-                flag_major("Reality cert-steering pattern on :" + std::to_string(pf.port) +
-                           " (cert covers foreign SNI '" + pf.sni->matched_foreign_sni + "')", 12);
+                any_reality = true;
+                ++reality_port_count;
+                if (pf.sni->passthrough_mode) {
+                    flag_major("Reality in passthrough mode on :" + std::to_string(pf.port) +
+                               " (base cert is for '" + pf.sni->matched_foreign_sni +
+                               "' — stream tunnelled to the real brand, SNI-based vhost routing "
+                               "then returns different certs per SNI; cert + ASN disagree)", 14);
+                } else {
+                    flag_major("Reality cert-steering pattern on :" + std::to_string(pf.port) +
+                               " (cert covers foreign SNI '" + pf.sni->matched_foreign_sni + "')", 12);
+                }
             }
         }
         if (pf.https && pf.https->tls_ok && pf.https->responded &&
             !pf.https->server_hdr.empty()) {
             string sbr = server_header_brand(pf.https->server_hdr);
-            if (!sbr.empty() && !asn_orgs_all.empty()) {
-                bool owns = asn_owns_brand(sbr, asn_orgs_all);
-                if (!owns) {
-                    flag_major("HTTP-over-TLS on :" + std::to_string(pf.port) +
-                               " returns `Server: " + printable_prefix(pf.https->server_hdr, 40) +
-                               "` — that banner is only emitted by '" + sbr +
-                               "' infrastructure, yet the ASN isn't owned by that brand "
-                               "(origin is proxying the HTTP stream to the real brand = Reality passthrough)",
-                               18);
-                    if (!(pf.sni && pf.sni->cert_impersonation)) {
-                        any_impersonation = true;
-                    }
+            if (brand_impersonated(sbr)) {
+                flag_major("HTTP-over-TLS on :" + std::to_string(pf.port) +
+                           " returns `Server: " + printable_prefix(pf.https->server_hdr, 40) +
+                           "` — that banner is only emitted by '" + sbr +
+                           "' infrastructure, yet the ASN isn't owned by that brand "
+                           "(origin is proxying the HTTP stream to the real brand = Reality passthrough)",
+                           18);
+                if (!(pf.sni && pf.sni->cert_impersonation)) {
+                    any_impersonation = true;
                 }
             }
         }
@@ -1206,14 +1228,7 @@ FullReport run_full_target(const string& target) {
         }
     }
 
-    // ---- NaiveProxy / forward-proxy + WebSocket transport signals ------
-    for (auto& [p, auth] : naive_ports) {
-        flag_major("NaiveProxy / Caddy forward_proxy on :" + std::to_string(p) +
-                   " — a proxy-style request over TLS drew 407 Proxy-Authenticate" +
-                   (auth.empty() ? "" : " ('" + printable_prefix(auth, 30) + "')") +
-                   ". a normal web server has no proxy auth — this is the NaiveProxy / "
-                   "forward-proxy signature.", 18);
-    }
+    // ---- WebSocket transport signals -----------------------------------
     for (auto& [p, path] : ws_ports) {
         if (sparse_vps_profile)
             flag_minor("WebSocket upgrade accepted (101) on :" + std::to_string(p) +
@@ -1322,18 +1337,17 @@ FullReport run_full_target(const string& target) {
             bool server_brand_mismatch = false;
             if (pf.https && pf.https->tls_ok && !pf.https->server_hdr.empty()) {
                 string sb = server_header_brand(pf.https->server_hdr);
-                if (!sb.empty() && !asn_owns_brand(sb, asn_orgs_all))
+                if (brand_impersonated(sb))
                     server_brand_mismatch = true;
             }
             // only call it impersonation when the cert claims a brand the ASN
-            // does NOT own. a cert that legitimately covers its own brand
-            // (e.g. *.dzen.ru on a VK ASN) must not get the [!brand-
-            // impersonation] tag — the penalty path already gates on this, the
-            // role label has to match it.
+            // does NOT own AND we didn't scan that brand's own domain. a cert
+            // that legitimately covers its own brand (e.g. *.dzen.ru on a VK
+            // ASN, or netflix.com on AWS) must not get the [!brand-impersonation]
+            // tag — the penalty path gates on this, the role label has to match.
             bool cert_brand_mismatch =
-                pf.sni && pf.sni->cert_impersonation && !pf.sni->brand_claimed.empty() &&
-                !asn_orgs_all.empty() &&
-                !asn_owns_brand(pf.sni->brand_claimed, asn_orgs_all);
+                pf.sni && pf.sni->cert_impersonation &&
+                brand_impersonated(pf.sni->brand_claimed);
             char buf[512] = {0};
             std::snprintf(buf, sizeof(buf),
                      " — %s / ALPN=%s / CN=%s / issuer=%s / age=%dd / validity=%dd / SAN=%d%s%s%s%s",
@@ -1348,24 +1362,21 @@ FullReport run_full_target(const string& target) {
                      canned_real ? " [!canned-fallback]" : "");
             role += buf;
             bool role_upgraded = false;
-            if (pf.sni && pf.sni->cert_impersonation && !pf.sni->brand_claimed.empty()
-                && !asn_orgs_all.empty()) {
-                bool owns = asn_owns_brand(pf.sni->brand_claimed, asn_orgs_all);
-                if (!owns) {
-                    const char* label = (pf.sni->passthrough_mode)
-                        ? "Reality with real passthrough (cert tunnelled from '"
-                        : "Reality-static / cert-cloning (cert impersonates '";
-                    role = string(label) + pf.sni->brand_claimed +
-                           (pf.sni->passthrough_mode
-                              ? "' via `dest=` — TLS stream transparently tunnelled) "
-                              : "' on an unrelated ASN) ") + role;
-                    role_upgraded = true;
-                }
+            if (pf.sni && pf.sni->cert_impersonation
+                && brand_impersonated(pf.sni->brand_claimed)) {
+                const char* label = (pf.sni->passthrough_mode)
+                    ? "Reality with real passthrough (cert tunnelled from '"
+                    : "Reality-static / cert-cloning (cert impersonates '";
+                role = string(label) + pf.sni->brand_claimed +
+                       (pf.sni->passthrough_mode
+                          ? "' via `dest=` — TLS stream transparently tunnelled) "
+                          : "' on an unrelated ASN) ") + role;
+                role_upgraded = true;
             }
             if (!role_upgraded && pf.https && pf.https->tls_ok &&
                 !pf.https->server_hdr.empty()) {
                 string sb = server_header_brand(pf.https->server_hdr);
-                if (!sb.empty() && !asn_owns_brand(sb, asn_orgs_all)) {
+                if (brand_impersonated(sb)) {
                     role = "Reality with real passthrough (`Server: " +
                            printable_prefix(pf.https->server_hdr, 24) +
                            "` banner comes from '" + sb +
@@ -1509,13 +1520,13 @@ FullReport run_full_target(const string& target) {
 
     printf("\n  %sDPI exposure matrix:%s\n", col(C::BOLD), col(C::RST));
     {
-        int naive_hits = 0;
+        int vpn_port_hits = 0;
         for (int p: {1194, 1723, 500, 4500, 51820, 1701, 8388, 8488, 8090, 10808, 10809})
-            if (openset.count(p)) ++naive_hits;
+            if (openset.count(p)) ++vpn_port_hits;
         axis("Port-based (default VPN ports)",
-             naive_hits >= 2 ? "HIGH" : naive_hits == 1 ? "MEDIUM" : "LOW",
-             naive_hits ? std::to_string(naive_hits) + " default VPN port(s) open" :
-                          "no default VPN ports among open set");
+             vpn_port_hits >= 2 ? "HIGH" : vpn_port_hits == 1 ? "MEDIUM" : "LOW",
+             vpn_port_hits ? std::to_string(vpn_port_hits) + " default VPN port(s) open" :
+                             "no default VPN ports among open set");
     }
     {
         if (any_wg || amnezia_on_wgport)
@@ -1617,14 +1628,16 @@ FullReport run_full_target(const string& target) {
     {
         if (any_impersonation) {
             int cnt = 0; string bdom;
-            for (auto& pf: R.fps) if (pf.sni && pf.sni->cert_impersonation) {
-                ++cnt; if (bdom.empty()) bdom = pf.sni->brand_claimed;
-            }
+            for (auto& pf: R.fps)
+                if (pf.sni && pf.sni->cert_impersonation &&
+                    brand_impersonated(pf.sni->brand_claimed)) {
+                    ++cnt; if (bdom.empty()) bdom = pf.sni->brand_claimed;
+                }
             int svr_cnt = 0;
             for (auto& pf: R.fps)
                 if (pf.https && pf.https->tls_ok && !pf.https->server_hdr.empty()) {
                     string sb = server_header_brand(pf.https->server_hdr);
-                    if (!sb.empty() && !asn_owns_brand(sb, asn_orgs_all)) {
+                    if (brand_impersonated(sb)) {
                         ++svr_cnt; if (bdom.empty()) bdom = sb;
                     }
                 }
@@ -1987,8 +2000,6 @@ FullReport run_full_target(const string& target) {
         // own traceroute hop; 10.x hops are ordinary operator addressing.
         // private-10.x hops are now reported as an informational note only and
         // do NOT contribute to the TSPU verdict.
-        rules.push_back({"NaiveProxy / forward-proxy",   !naive_ports.empty(),
-                         "407 Proxy-Authenticate to a proxy-style request over TLS"});
         rules.push_back({"VLESS/VMess-WebSocket",        (!ws_ports.empty() && sparse_vps_profile),
                          "WebSocket 101 upgrade on a guessed path, sparse hosting host"});
 

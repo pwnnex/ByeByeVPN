@@ -14,6 +14,7 @@
 #include "scan/j3.h"
 #include "scan/grpc.h"
 #include "scan/dpi_probe.h"
+#include "scan/ech.h"
 #include "scan/snitch.h"
 #include "geoip/geoip.h"
 #include "local/local.h"
@@ -117,7 +118,7 @@ int main(int argc, char** argv) {
                 static const set<string> cmds = {
                     "scan","full","ports","udp","tls","j3","geoip",
                     "snitch","trace","traceroute","local","me","self","help",
-                    "audit-config","audit","sweep","grpc","dpi"
+                    "audit-config","audit","sweep","grpc","dpi","ech"
                 };
                 if (pos.size() >= 2 && cmds.count(pos[0])) target = pos[1];
                 else                                       target = pos[0];
@@ -330,6 +331,28 @@ int main(int argc, char** argv) {
                 printf("  fragmented CH: %s\n", d.frag_evades ? "EVADES (got through)" : "still reset");
             printf("  => %s\n", d.note.c_str());
             rc = d.sni_blocked ? 2 : 0;
+        } else if (cmd == "ech") {
+            if (pos.size() < 2) { printf("need a domain\n"); rc = 64; goto done; }
+            EchInfo e = ech_query(pos[1]);
+            if (!e.has_https_rr) {
+                printf("  %sno HTTPS RR for %s%s  (%s)\n",
+                       col(C::DIM), pos[1].c_str(), col(C::RST), e.err.c_str());
+                rc = 1; goto done;
+            }
+            printf("  %sHTTPS RR (DNS type 65) published for %s%s\n",
+                   col(C::BOLD), pos[1].c_str(), col(C::RST));
+            printf("  ALPN: %s%s%s%s\n", col(C::CYN),
+                   e.alpn.empty() ? "-" : e.alpn.c_str(), col(C::RST),
+                   e.alpn.find("h3") != string::npos ? "  (HTTP/3 advertised)" : "");
+            if (!e.ipv4hint.empty()) printf("  ipv4hint: %s\n", e.ipv4hint.c_str());
+            if (!e.ipv6hint.empty()) printf("  ipv6hint: %s\n", e.ipv6hint.c_str());
+            if (e.has_ech)
+                printf("  %sECH: YES%s  (ECHConfigList ~%d bytes) — SNI is encrypted, hidden from on-path DPI\n",
+                       col(C::GRN), col(C::RST), e.ech_len);
+            else
+                printf("  %sECH: no%s  (no ech= param; the SNI travels in cleartext and is DPI-visible)\n",
+                       col(C::YEL), col(C::RST));
+            rc = 0;
         } else if (cmd == "audit-config" || cmd == "audit") {
             if (pos.size() < 2) { printf("need a config file path\n"); rc = 64; goto done; }
             rc = run_config_audit(pos[1]);

@@ -92,30 +92,3 @@ WsProbe ws_probe(const string& ip, int port, const string& sni, int to_ms) {
     }
     return r;
 }
-
-NaiveProbe naive_probe(const string& ip, int port, const string& sni, int to_ms) {
-    NaiveProbe r;
-    // a proxy-style absolute-URI request: a forward proxy that wants auth
-    // (NaiveProxy / Caddy forward_proxy) answers 407 + Proxy-Authenticate; a
-    // plain web server 400s or serves a page.
-    string req =
-        "GET http://www.google.com/ HTTP/1.1\r\n"
-        "Host: www.google.com\r\n"
-        "Connection: close\r\n\r\n";
-    bool ok = false;
-    string resp = tls_round_trip(ip, port, sni, req, to_ms, ok);
-    r.tls_ok = ok;
-    if (resp.empty()) return r;
-    r.first_line = first_line_of(resp);
-    r.status = status_of(r.first_line);
-
-    string lower = tolower_s(resp);
-    size_t pa = lower.find("\nproxy-authenticate:");
-    if (pa != string::npos) {
-        size_t vs = pa + 20;
-        size_t ve = resp.find('\n', vs);
-        r.proxy_authenticate = trim(resp.substr(vs, (ve == string::npos ? resp.size() : ve) - vs));
-    }
-    r.proxy_auth_required = (r.status == 407) || !r.proxy_authenticate.empty();
-    return r;
-}

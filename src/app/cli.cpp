@@ -108,6 +108,7 @@ void help() {
     printf("  byebyevpn j3 <ip> [port]       J3 active probing only\n");
     printf("  byebyevpn grpc <ip> [port]     HTTP/2 + gRPC transport probe (VLESS/VMess-gRPC)\n");
     printf("  byebyevpn dpi <host> [port]    active SNI-RST path probe (is YOUR ISP/TSPU resetting this SNI)\n");
+    printf("  byebyevpn ech <domain>         DNS HTTPS-RR / ECH probe (does this domain hide its SNI via ECH)\n");
     printf("  byebyevpn geoip <ip>           GeoIP only\n");
     printf("  byebyevpn snitch <ip> [port]   SNITCH RTT/GeoIP consistency (methodika §10.1)\n");
     printf("  byebyevpn trace <ip>           Traceroute hop-count analysis\n");

@@ -18,7 +18,8 @@
 
 **Discussion / report issues:**
 [ntc.party/t/byebyevpn/24325](https://ntc.party/t/byebyevpn/24325) ·
-[GitHub Issues](https://github.com/pwnnex/ByeByeVPN/issues)
+[GitHub Issues](https://github.com/pwnnex/ByeByeVPN/issues) ·
+[Telegram](https://t.me/pwnnex) 
 
 <a href="https://nowpayments.io/donation/byebyevpn" target="_blank" rel="noreferrer noopener">
     <img src="https://nowpayments.io/images/embeds/donation-button-black.svg" alt="Crypto donation button by NOWPayments">

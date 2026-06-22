@@ -1,6 +1,6 @@
 # Changelog
 
-## v2.8.3 - unreleased
+## v2.8.3 - 2026-06-22
 
 ### new: `ech` — DNS HTTPS-RR / ECH probe
 

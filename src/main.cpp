@@ -151,7 +151,7 @@ int main(int argc, char** argv) {
                                  lt->tm_hour, lt->tm_min, lt->tm_sec);
             if (!pos.empty())
                 std::fprintf(g_save_fp, "**Target:** `%s`  \n", pos.back().c_str());
-            std::fprintf(g_save_fp, "**Scanner version:** v2.8.2  \n\n");
+            std::fprintf(g_save_fp, "**Scanner version:** v2.8.3  \n\n");
             std::fprintf(g_save_fp, "```\n");
         }
     }

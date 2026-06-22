@@ -11,7 +11,7 @@
 | |_) | |_| |  __/ |_) | |_| |  __/\ V / |  __/| |\  |
 |____/ \__, |\___|____/ \__, |\___| \_/  |_|   |_| \_|
        |___/            |___/
-   Full TSPU/DPI/VPN detectability scanner   v2.8.2
+   Full TSPU/DPI/VPN detectability scanner   v2.8.3
 ```
 
 **Languages:** [English](#english) · [Русский](#русский) · [简体中文](README.zh-CN.md) · [فارسی](README.fa.md)
@@ -204,7 +204,7 @@ match appears, and re-runs the grep across the full tree on every tag.
 
 ### Install
 
-Windows: download `byebyevpn-v2.8.2-win64.zip` from
+Windows: download `byebyevpn-v2.8.3-win64.zip` from
 [Releases](../../releases), extract, run `byebyevpn.exe` - either
 double-click for the interactive menu, or pass an IP/hostname from
 the terminal.
@@ -546,7 +546,7 @@ CI workflow (`.github/workflows/release.yml`) проваливает сборк�
 
 ### Установка
 
-Windows: скачать `byebyevpn-v2.8.2-win64.zip` со страницы
+Windows: скачать `byebyevpn-v2.8.3-win64.zip` со страницы
 [Releases](../../releases), распаковать, запустить `byebyevpn.exe`
 (двойной клик = интерактивное меню, либо IP/hostname из терминала).
 

@@ -30,9 +30,10 @@ SOCKET tcp_connect(const string& host, int port, int timeout_ms, string& err) {
         if (WSAGetLastError() == WSAEWOULDBLOCK) {
             fd_set wr, ex; FD_ZERO(&wr); FD_SET(s, &wr); FD_ZERO(&ex); FD_SET(s, &ex);
             timeval tv{}; tv.tv_sec = timeout_ms / 1000; tv.tv_usec = (timeout_ms % 1000) * 1000;
-            int sr = select(0, nullptr, &wr, &ex, &tv);
+            int sr = select(static_cast<int>(s) + 1, nullptr, &wr, &ex, &tv);
             if (sr > 0 && FD_ISSET(s, &wr)) {
-                int se = 0; int sl = sizeof(se);
+                int se = 0;
+                socket_len_t sl = sizeof(se);
                 getsockopt(s, SOL_SOCKET, SO_ERROR, (char*)&se, &sl);
                 if (se == 0) { u_long bl = 0; ioctlsocket(s, FIONBIO, &bl); break; }
                 if (se == WSAECONNREFUSED) saw_refused = true;
@@ -54,8 +55,7 @@ SOCKET tcp_connect(const string& host, int port, int timeout_ms, string& err) {
 }
 
 int tcp_recv_to(SOCKET s, char* buf, int max, int timeout_ms) {
-    DWORD to = (DWORD)timeout_ms;
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&to, sizeof(to));
+    set_socket_recv_timeout(s, timeout_ms);
     return recv(s, buf, max, 0);
 }
 

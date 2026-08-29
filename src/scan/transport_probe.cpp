@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "transport_probe.h"
 #include "tls_ctx.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "../common/util.h"
 #include "../net/tcp.h"
 
@@ -23,8 +23,7 @@ string tls_round_trip(const string& ip, int port, const string& sni,
     string err;
     SOCKET s = tcp_connect(ip, port, to_ms, err);
     if (s == INVALID_SOCKET) return {};
-    DWORD tv = (DWORD)to_ms;
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv));
+    set_socket_recv_timeout(s, to_ms);
 
     SSL_CTX* ctx = shared_tls_client_ctx();
     SSL* ssl = ctx ? SSL_new(ctx) : nullptr;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "udp_probes.h"
 #include "quic.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 
 #include <openssl/rand.h>
 

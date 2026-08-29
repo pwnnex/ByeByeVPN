@@ -211,6 +211,11 @@ byebyevpn local                  # 扫描本机
 详见 [BUILD.md](BUILD.md) 完整说明、OpenSSL 溯源、SHA256。简要：
 
 ```bash
+# macOS（Apple Silicon 或 Intel）
+brew install cmake openssl@3
+make macos
+./build-macos/byebyevpn help
+
 # msys2 UCRT64
 pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-make
 git clone https://github.com/pwnnex/ByeByeVPN.git && cd ByeByeVPN

@@ -4,7 +4,7 @@
 // caller can give meaningful diagnostics.
 #pragma once
 
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include <string>
 
 // connect to host:port, return socket on success, INVALID_SOCKET on failure.

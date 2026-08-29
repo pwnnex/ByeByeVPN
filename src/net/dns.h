@@ -3,7 +3,7 @@
 // silently-failing v6 paths on RU/CIS ISPs.
 #pragma once
 
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include <string>
 #include <vector>
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// entry point: WSAStartup + OpenSSL init, CLI arg parsing, dispatch.
-#include "common/winhdr.h"
+// entry point: runtime initialization, CLI arg parsing, dispatch.
+#include "common/platform.h"
 #include "common/console.h"
 #include "common/config.h"
 #include "common/util.h"
@@ -44,7 +44,7 @@ using std::set;
 
 int main(int argc, char** argv) {
     enable_vt();
-    WSADATA ws; WSAStartup(MAKEWORD(2, 2), &ws);
+    platform_startup();
     SSL_library_init();
     SSL_load_error_strings();
     OpenSSL_add_all_algorithms();
@@ -375,6 +375,6 @@ done:
         g_save_fp = nullptr;
         std::fprintf(stderr, "saved to %s\n", g_save_path.c_str());
     }
-    WSACleanup();
+    platform_cleanup();
     return rc;
 }

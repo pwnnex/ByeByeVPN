@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "console.h"
 #include "config.h"
-#include "winhdr.h"
+#include "platform.h"
 
 #include <cstdarg>
 #include <cstring>
@@ -23,11 +23,7 @@ namespace C {
 const char* col(const char* c) { return g_no_color ? "" : c; }
 
 void enable_vt() {
-    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
-    DWORD mode = 0;
-    if (GetConsoleMode(h, &mode))
-        SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-    SetConsoleOutputCP(CP_UTF8);
+    platform_enable_virtual_terminal();
 }
 
 // strip ANSI CSI / SGR sequences (ESC '[' ... letter) when teeing to file.

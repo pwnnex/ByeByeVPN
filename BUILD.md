@@ -1,5 +1,26 @@
 # Build guide
 
+## macOS (Apple Silicon and Intel)
+
+```bash
+xcode-select --install # skip if already installed
+brew install cmake openssl@3
+git clone https://github.com/pwnnex/ByeByeVPN.git && cd ByeByeVPN
+make macos
+./build-macos/byebyevpn help
+```
+
+Direct CMake build:
+
+```bash
+cmake -S . -B build-macos \
+  -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build-macos --parallel
+```
+
+Output: `build-macos/byebyevpn`
+
 This document explains how to reproduce `byebyevpn.exe` from source with
 verified OpenSSL provenance. The static OpenSSL archives
 (`libssl.a`, `libcrypto.a`) live in `build-win/` and are tracked in

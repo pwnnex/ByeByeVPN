@@ -2,7 +2,7 @@
 // subnet sweep — networking + threading half (run_sweep). the CIDR math and
 // clustering live in sweep_core.cpp (pure, unit-tested).
 #include "sweep.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "../common/console.h"
 #include "../net/tcp.h"
 #include "../scan/tls.h"

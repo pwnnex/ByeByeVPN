@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tcpfp.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "../common/util.h"
 #include "../net/tcp.h"
 
@@ -14,43 +14,6 @@ using std::string;
 using std::vector;
 
 namespace {
-
-// SIO_TCP_INFO is exposed since Windows 10 1703. struct is TCP_INFO_v0.
-// version 0 fields:
-//   State, Mss, ConnectionTimeMs, TimestampsEnabled,
-//   RttUs, MinRttUs, BytesInFlight,
-//   Cwnd, SndWnd, RcvWnd, RcvBuf,
-//   BytesOut, BytesIn, BytesReordered, BytesRetrans,
-//   FastRetrans, DupAcksIn, TimeoutEpisodes,
-//   SynRetrans
-// SndWnd is the peer's advertised receive window (what we can send).
-// RcvWnd is what we advertise (our local). we want SndWnd as the peer signal.
-// the constant SIO_TCP_INFO is _WSAIORW(IOC_VENDOR, 39) = 0xD8000027.
-#ifndef SIO_TCP_INFO
-#define SIO_TCP_INFO  _WSAIORW(IOC_VENDOR, 39)
-#endif
-
-struct TCP_INFO_v0_local {
-    unsigned int State;
-    unsigned int Mss;
-    unsigned long long ConnectionTimeMs;
-    unsigned char TimestampsEnabled;
-    unsigned int RttUs;
-    unsigned int MinRttUs;
-    unsigned int BytesInFlight;
-    unsigned int Cwnd;
-    unsigned int SndWnd;
-    unsigned int RcvWnd;
-    unsigned int RcvBuf;
-    unsigned long long BytesOut;
-    unsigned long long BytesIn;
-    unsigned int BytesReordered;
-    unsigned int BytesRetrans;
-    unsigned int FastRetrans;
-    unsigned int DupAcksIn;
-    unsigned int TimeoutEpisodes;
-    unsigned char SynRetrans;
-};
 
 double median(vector<double> v) {
     if (v.empty()) return 0.0;
@@ -110,15 +73,13 @@ double timed_connect(const string& host, int port, int to_ms) {
 }
 
 // connect, immediately probe SIO_TCP_INFO, return the snapshot.
-bool snapshot_tcp_info(const string& host, int port, int to_ms, TCP_INFO_v0_local& out) {
+bool snapshot_tcp_info(const string& host, int port, int to_ms, SocketTcpInfo& out) {
     string err;
     SOCKET s = tcp_connect(host, port, to_ms, err);
     if (s == INVALID_SOCKET) return false;
-    DWORD version = 0; DWORD bytesRet = 0;
-    int rc = WSAIoctl(s, SIO_TCP_INFO, &version, sizeof(version),
-                      &out, sizeof(out), &bytesRet, nullptr, nullptr);
+    bool ok = query_socket_tcp_info(s, out);
     closesocket(s);
-    return rc == 0 && bytesRet >= sizeof(unsigned int) * 4;
+    return ok;
 }
 
 // closed-port behavior. returns ms-to-RST or -1 on timeout.
@@ -165,11 +126,11 @@ TcpFp tcp_fingerprint(const string& ip, int open_port, int closed_port_hint) {
     f.bimodal = f.handshake_stddev_ms > 0.5 * f.handshake_median_ms;
 
     // 2) peer window + MSS via SIO_TCP_INFO
-    TCP_INFO_v0_local info{};
+    SocketTcpInfo info{};
     if (snapshot_tcp_info(ip, open_port, 2000, info)) {
         f.tcp_info_ok = true;
-        f.peer_window = (int)info.SndWnd;
-        f.peer_mss    = (int)info.Mss;
+        f.peer_window = (int)info.send_window;
+        f.peer_mss    = (int)info.mss;
     }
 
     // 3) closed-port behavior (optional)

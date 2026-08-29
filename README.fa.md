@@ -255,6 +255,11 @@ timeout را می‌سوزاند.
 </div>
 
 ```bash
+# macOS (Apple Silicon یا Intel)
+brew install cmake openssl@3
+make macos
+./build-macos/byebyevpn help
+
 # msys2 UCRT64
 pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-make
 git clone https://github.com/pwnnex/ByeByeVPN.git && cd ByeByeVPN

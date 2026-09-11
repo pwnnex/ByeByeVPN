@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "udp.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "../common/util.h"
 #include "../common/config.h"
 
@@ -38,8 +38,7 @@ UdpResult udp_probe(const string& host, int port,
 
     SOCKET s = socket(chosen->ai_family, SOCK_DGRAM, IPPROTO_UDP);
     if (s == INVALID_SOCKET) { freeaddrinfo(ai); r.err = "socket"; return r; }
-    DWORD to = (DWORD)timeout_ms;
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&to, sizeof(to));
+    set_socket_recv_timeout(s, timeout_ms);
     int rc = sendto(s, (const char*)payload, plen, 0, chosen->ai_addr, (int)chosen->ai_addrlen);
     freeaddrinfo(ai);
     if (rc <= 0) { closesocket(s); r.err = "send"; return r; }

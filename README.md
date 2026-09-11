@@ -348,6 +348,11 @@ See [BUILD.md](BUILD.md) for full instructions, OpenSSL provenance,
 and SHA256s. Short form:
 
 ```bash
+# macOS (Apple Silicon or Intel)
+brew install cmake openssl@3
+make macos
+./build-macos/byebyevpn help
+
 # msys2 UCRT64
 pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-make
 git clone https://github.com/pwnnex/ByeByeVPN.git && cd ByeByeVPN

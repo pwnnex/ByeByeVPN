@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "dpi_probe.h"
 #include "chrome_ch.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "../net/tcp.h"
 
 #include <chrono>
@@ -56,8 +56,7 @@ ChResult send_ch(const string& ip, int port, const string& sni, bool fragment, i
         send(s, (const char*)rec.data(), (int)rec.size(), 0);
     }
 
-    DWORD tv = (DWORD)to_ms;
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv));
+    set_socket_recv_timeout(s, to_ms);
     char buf[512];
     int n = recv(s, buf, sizeof(buf), 0);
     int dt = (int)std::chrono::duration_cast<std::chrono::milliseconds>(

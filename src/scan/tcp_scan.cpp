@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tcp_scan.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "../net/tcp.h"
 
 #include <algorithm>
@@ -42,17 +42,16 @@ vector<TcpOpen> scan_tcp(const string& host, const vector<int>& ports,
     std::atomic<size_t> tmo{0}, refused{0}, other{0};
     std::atomic<bool>   abort_scan{false};
 
-    while (_kbhit()) _getch();
-    std::fprintf(stderr, "  (press 'q' to skip this phase)\n");
+    discard_console_keys();
+    if (console_skip_supported())
+        std::fprintf(stderr, "  (press 'q' to skip this phase)\n");
 
     std::thread kb([&]{
+        if (!console_skip_supported()) return;
         while (!abort_scan.load()) {
-            if (_kbhit()) {
-                int c = _getch();
-                if (c == 'q' || c == 'Q' || c == 27) {
-                    abort_scan = true;
-                    break;
-                }
+            if (console_skip_requested()) {
+                abort_scan = true;
+                break;
             }
             Sleep(50);
         }

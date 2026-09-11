@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "grpc.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "../net/tcp.h"
 
 #include <openssl/ssl.h>
@@ -60,8 +60,7 @@ GrpcProbe grpc_probe(const string& ip, int port, const string& sni, int to_ms) {
     string err;
     SOCKET s = tcp_connect(ip, port, to_ms, err);
     if (s == INVALID_SOCKET) { r.err = err; return r; }
-    DWORD tv = (DWORD)to_ms;
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv));
+    set_socket_recv_timeout(s, to_ms);
 
     SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
     if (!ctx) { closesocket(s); r.err = "ctx"; return r; }

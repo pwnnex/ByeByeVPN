@@ -3,7 +3,7 @@
 #include "tls.h"
 #include "brand.h"
 #include "../common/util.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 
 #include <set>
 #include <vector>

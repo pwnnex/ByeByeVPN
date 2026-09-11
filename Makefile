@@ -61,6 +61,12 @@ WIN_OSSL_DIR ?= build-win
 
 all: $(BIN)
 
+# Native Apple Silicon / Intel macOS build. Homebrew supplies OpenSSL;
+# libcurl is provided by the macOS SDK.
+macos:
+	cmake -S . -B build-macos -DOPENSSL_ROOT_DIR="$$(brew --prefix openssl@3)" -DCMAKE_BUILD_TYPE=Release
+	cmake --build build-macos --parallel
+
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
@@ -168,4 +174,4 @@ clean:
 	rm -f byebyevpn-tests byebyevpn-tests-asan fuzz_ja4 byebyevpn-sbom.json
 	rm -rf dist-release
 
-.PHONY: all windows windows-static static release-zip install clean test test-asan fuzz
+.PHONY: all macos windows windows-static static release-zip install clean test test-asan fuzz

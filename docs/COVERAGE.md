@@ -34,7 +34,7 @@ Status values:
 | 17 | GeoIP VPN/proxy/Tor tags | not F1 | geoip/geoip.cpp | 6 hosting addresses, 0 tags | ref |
 | 18 | RTT vs GeoIP band | none from server side | scan/snitch.cpp | A (no country: no claim) | ref |
 | 19 | Address block lists | F1 | none | none | gap |
-| 20 | SNI allow/block policy | F3, F8 | scan/dpi_probe.cpp, `dpi` (four outcomes, `--json`) | test_dpi_socket.py, test_volume.cpp | client side only |
+| 20 | SNI allow/block policy | F3, F8, F10 | scan/dpi_probe.cpp, scan/sni_mismatch.cpp, `dpi` and `dpi --sni --real` | test_dpi_socket.py, test_volume.cpp; SM, SP, SB, SD, SR | client side only |
 | 21 | Volume freeze after 16-20 KB | F7 | scan/volume_probe.cpp, `dpi --volume` | VZ, VV, VY, VT, VA, VC, VN; test_volume.cpp | client side; lab emulates the node side only, no real freeze measured yet |
 | 22 | Local tunnel on the target route | preflight | app/preflight.cpp | H2 on this machine | wire |
 | 23 | Local ack-all stack | preflight | app/preflight.cpp | H2 on this machine | wire |
@@ -44,6 +44,9 @@ Status values:
 | 27 | Control API on a public address (config) | F11 | app/config_audit.cpp `api-public` | tests/fixtures/audit (xray api tag and listen, sing-box Clash API) | offline |
 | 28 | Listeners that cannot start: one port and layer twice, duplicate tag or email, empty TLS version range (config) | none | app/config_audit.cpp | tests/fixtures/audit | offline, compatibility |
 | 29 | Settings the core ignores, REALITY under disabled sing-box TLS (config) | F6 for the plaintext case | app/config_audit.cpp `settings-ignored`, `plaintext-proto` | tests/fixtures/audit | offline; hygiene except the plaintext case |
+| 30 | Names under the owner's domain in public CT logs, and which share an address | none (what any observer can list) | scan/ct_names.cpp, `names --ct` | test_ct_names.cpp, tests/fixtures/ct | ref; network only to crt.sh, or none with `--ct-file` |
+| 31 | Client config: plaintext, missing browser fingerprint, missing SNI, disabled certificate checks, malformed REALITY key or shortId | F3 (the ClientHello the box reads) | app/config_audit.cpp `client-*` | tests/fixtures/audit `client-*` | offline |
+| 32 | Server and client configs that cannot connect: port, protocol, transport, security, path, user, flow, REALITY serverName, shortId, key pair | none (breakage, not observability) | app/config_audit.cpp `pair-*`, `audit-config <server> <client>` | tests/fixtures/audit `pair-*` | offline, compatibility |
 
 Rows 27 to 29 come from the offline audit: the input is a file, nothing
 goes on the wire, and a false positive can only come from a logic error.

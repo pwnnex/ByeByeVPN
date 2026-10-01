@@ -19,6 +19,7 @@ void save_end();
 // returns an exit code mirroring the scan verdict tiers:
 //   0 pass, 1 throttle, 2 block, 3 immediate block, 64 on file/parse error.
 int run_config_audit(const std::string& path);
+int run_config_pair(const std::string& server_path, const std::string& client_path);
 
 // offline packet-capture analysis. 0 completed, 64 input/read error.
 int run_awg_analysis(const std::string& path);

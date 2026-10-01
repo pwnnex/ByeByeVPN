@@ -31,6 +31,14 @@ int         g_wg_port = 51820;
 std::string g_volume_path;
 std::string g_volume_control;
 
+std::string g_dpi_sni;
+std::string g_dpi_real;
+
+bool        g_names_ct = false;
+std::string g_ct_file;
+bool        g_resolve = false;
+std::string g_node_ip;
+
 PortMode         g_port_mode = PortMode::FULL;
 int              g_range_lo  = 1;
 int              g_range_hi  = 65535;

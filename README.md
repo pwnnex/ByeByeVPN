@@ -448,7 +448,18 @@ service; the report retains each source (`target`, `cert_cn:port`, `cert_san:por
 Provider-domain and node-pattern rules cover selected Mullvad, IVPN, NordVPN
 and Cloudflare WARP names. A provider's website is not necessarily a VPN endpoint.
 `workers.dev` is reported as shared application hosting, not VPN evidence.
-The command does not resolve names, enumerate subdomains or query CT logs.
+Plain `names` does not resolve names, enumerate subdomains or query CT logs.
+
+`names example.com --ct` lists every name under your domain that public
+certificate transparency logs already hold (via crt.sh), with the same
+markers: `panel.`, `sub.`, `remnawave.` and the rest are exactly what
+anyone finds there without touching your node. `--ct-file saved.json`
+reads a crt.sh JSON you saved instead, with no network at all.
+`--resolve` asks DNS from this machine for those names and shows which
+share an address; `--node IP` marks your node (behind a CDN a shared
+address means nothing, and the output says so). A failed lookup exits 4
+and is never read as "no names"; crt.sh is often overloaded, retry later
+or use `--ct-file`.
 
 Exit codes: **3** strong naming hints, **2** moderate, **0** weak/none/IP input,
 **64** invalid input. Exit 0 does not certify a clean server. Invalid names
@@ -491,6 +502,14 @@ every result says so.
   0 carried, 2 stalled, 4 inconclusive or not applicable. The request is
   `GET` with Host, Accept and Connection, the same header set as the HTTPS
   probe.
+- `dpi <node> [port] --sni NAME --real IP|auto`: the name your node serves
+  (for Reality, its serverName) goes to the node and to the address the
+  name really lives on (`auto` resolves it). If it fails to the node and
+  passes to its own address while a benign name to the node works, this
+  path ties the name to its address, the rule field reports blame for
+  Reality with brand targets. If it fails to both, the name itself is
+  blocked here. Two agreeing rounds out of three; exit 0 passes, 2 fails,
+  4 inconclusive.
 
 Hostnames are resolved via `getaddrinfo`; IPv4 is always preferred,
 and the chosen IP is printed in phase [1/8]. On IPv4-only links (RU /
@@ -541,6 +560,15 @@ Findings that do not change what an observer sees print in a separate
 **Hygiene** block and never move the tier: settings for another transport
 or security mode that the core ignores, two users with one id or password,
 debug logging, REALITY `show`.
+
+Client configs (proxy outbounds) are checked too: VLESS or Trojan without
+TLS, no browser fingerprint (Go ClientHello), no server name, certificate
+checks off, a malformed REALITY key or shortId.
+`byebyevpn audit-config server.json client.json` checks a client against
+its server, Xray and sing-box in any mix: port, protocol, transport,
+security, path, user, flow, REALITY serverName and shortId, and whether the
+client's publicKey really belongs to the server's privateKey. Each
+mismatch is a compatibility error; no key, id or password is printed.
 Compatibility errors exit with **65** and don't count as network signatures.
 File/parse errors exit with **64**; **0-3** retain the legacy exposure tiers.
 The file size limit is 16 MiB.
@@ -991,6 +1019,25 @@ server, которые были у Xray; REALITY при выключенном `
 одним id, debug-лог, REALITY `show`), выводится отдельным блоком
 **Hygiene** и на tier не влияет.
 
+Клиентские конфиги (прокси-outbounds) тоже проверяются: VLESS или Trojan
+без TLS, нет браузерного отпечатка (уходит ClientHello от Go), нет имени
+сервера, отключена проверка сертификата, битый ключ или shortId REALITY.
+`byebyevpn audit-config server.json client.json` сверяет клиента с его
+сервером, Xray и sing-box в любом сочетании: порт, протокол, транспорт,
+защита, путь, пользователь, flow, serverName и shortId REALITY и то, что
+publicKey клиента действительно от privateKey сервера. Каждое расхождение
+это ошибка совместимости (выход 65); ключи, id и пароли не печатаются.
+
+`names example.com --ct` показывает все имена под вашим доменом, которые
+уже лежат в публичных логах Certificate Transparency (через crt.sh), с теми
+же маркерами: `panel.`, `sub.`, `remnawave.` и прочее, что любой найдёт там,
+не трогая ноду. `--ct-file saved.json` читает сохранённый JSON crt.sh,
+совсем без сети. `--resolve` резолвит имена с этой машины и показывает,
+какие сидят на одном адресе; `--node IP` отмечает вашу ноду (за CDN общий
+адрес ничего не значит, вывод это пишет). Неудачный запрос выходит с 4 и
+никогда не читается как «имён нет»; crt.sh часто перегружен, повторите
+позже или используйте `--ct-file`.
+
 Каждая команда, которая шлёт пакеты на цель (`scan`, `ports`, `udp`, `tls`,
 `j3`, `grpc`, `snitch`, `trace`, `dpi`), сначала делает preflight и при
 провале выходит с кодом 5, ничего не отправив.
@@ -1079,6 +1126,14 @@ byebyevpn names wg01.example.com us8360.nordvpn.com --json
   ресурс меньше 64 КБ даёт not applicable. Выход 0 передал, 2 встал,
   4 inconclusive или not applicable. Запрос `GET` с Host, Accept и
   Connection, тот же набор заголовков, что у HTTPS-пробы.
+- `dpi <нода> [port] --sni ИМЯ --real IP|auto`: имя, которое обслуживает
+  нода (для Reality её serverName), уходит на ноду и на адрес, где это имя
+  живёт на самом деле (`auto` резолвит его). Если до ноды не проходит, а до
+  своего адреса проходит, и безобидное имя до ноды работает, значит путь
+  связывает имя с адресом, то самое правило, на которое жалуются для
+  Reality с брендовым target. Если не проходит никуда, режется само имя.
+  Два согласных раунда из трёх; выход 0 проходит, 2 не проходит,
+  4 inconclusive.
 
 Hostname резолвится через `getaddrinfo`; IPv4 выбирается всегда, а
 выбранный IP печатается в фазе [1/8]. На IPv4-only каналах (РФ / СНГ)

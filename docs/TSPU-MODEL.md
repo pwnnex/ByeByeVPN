@@ -73,7 +73,7 @@ reader, not a model of the box. Consequences for the verdict engine:
 | F7 freeze | no from the server side; yes from the owner's client with `dpi --volume` | needs sustained traffic through the operator. The owner downloads a resource of 64 KB or more from the node and from a control host and records where bytes stop on an open connection. The observation is about this path at this moment (**field** for the rule; the check itself is lab-verified on an emulated freeze only) |
 | F8 allow lists | no | policy on the client side |
 | F9 entropy | no | passive property of client traffic |
-| F10 SNI/IP mismatch | partly | the scan sees which certificate the address serves; the ASN comes from GeoIP, and whether the box uses the rule is unconfirmed |
+| F10 SNI/IP mismatch | partly from the server side; yes from the owner's client with `dpi --sni --real` | the scan sees which certificate the address serves; the ASN comes from GeoIP. From the client, the same name sent to the node and to the address it really lives on tells whether this path ties the name to its address (lab-verified on an emulated box only) |
 | F11 | yes | this is exactly what the scan does |
 
 Conclusion that drives the whole tool: **CLEAN from an active scan means
@@ -103,7 +103,9 @@ stand A byte for byte.
 
 1. Does the box act on F10 (brand SNI outside the brand ASN) or only on
    list membership of the address? Field reports on Reality with
-   `www.microsoft.com` targets are consistent with both.
+   `www.microsoft.com` targets are consistent with both. `dpi --sni NAME
+   --real auto` now answers it for one path at a time: a positive there is
+   F10 on that path; the field log should collect these.
 2. Does any active scanning by the operator side exist at scale, and what
    does it probe? If yes, F6/F11 matter more than this model assumes.
 3. F9 on TSPU: no direct evidence. Must not be scored until there is.

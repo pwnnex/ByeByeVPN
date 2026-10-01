@@ -1,0 +1,47 @@
+{
+  "inbounds": [
+    {
+      "protocol": "socks",
+      "listen": "127.0.0.1",
+      "port": 1080,
+      "settings": {
+        "udp": true
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "203.0.113.10",
+            "port": 8443,
+            "users": [
+              {
+                "id": "5f2e1a44-7d1c-4c6a-9b36-2a8c1e0f9d11",
+                "flow": "",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "wsSettings": {
+          "path": "/b"
+        },
+        "tlsSettings": {
+          "serverName": "cdn.example.com",
+          "fingerprint": "chrome"
+        }
+      }
+    },
+    {
+      "protocol": "freedom",
+      "tag": "direct"
+    }
+  ]
+}

@@ -64,6 +64,8 @@ SRC := \
     src/scan/dpi_probe.cpp \
     src/scan/volume_probe.cpp \
     src/scan/volume_analysis.cpp \
+    src/scan/sni_mismatch.cpp \
+    src/scan/ct_names.cpp \
     src/scan/ech.cpp \
     src/scan/ech_query.cpp \
     src/local/local.cpp \
@@ -180,6 +182,9 @@ TEST_SRC := \
     src/scan/wg_handshake.cpp \
     tests/test_volume.cpp \
     src/scan/volume_analysis.cpp \
+    src/scan/sni_mismatch.cpp \
+    tests/test_ct_names.cpp \
+    src/scan/ct_names.cpp \
     src/scan/awg_entropy.cpp \
     src/scan/awg_capture.cpp \
     src/scan/udp_validate.cpp \

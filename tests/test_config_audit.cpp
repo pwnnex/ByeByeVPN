@@ -111,6 +111,46 @@ TEST_CASE("control apis on public addresses are exposure, on loopback nothing") 
     CHECK_FALSE(has_tag(audit_config_text(clash_loc), "api-public"));
 }
 
+// rfc 7748 alice: private, its public, and bob's public as a wrong key
+static const char* SERVER_REALITY = R"({"inbounds":[{"protocol":"vless","port":443,
+  "settings":{"decryption":"none","clients":[{"id":"u1","flow":"xtls-rprx-vision"}]},
+  "streamSettings":{"network":"raw","security":"reality","realitySettings":{"target":"www.example.com:443",
+    "serverNames":["www.example.com"],"privateKey":"dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo","shortIds":["ab"]}}}]})";
+
+static std::string sb_client(const std::string& pub, bool utls) {
+    return std::string(R"({"outbounds":[{"type":"vless","server":"203.0.113.10","server_port":443,"uuid":"u1",
+      "flow":"xtls-rprx-vision","tls":{"enabled":true,"server_name":"www.example.com",)") +
+           (utls ? R"("utls":{"enabled":true},)" : "") +
+           R"("reality":{"enabled":true,"public_key":")" + pub + R"(","short_id":"ab"}}}]})";
+}
+
+TEST_CASE("pair check: a sing-box client against an xray server, keys proven by x25519") {
+    ConfigAudit ok = audit_config_pair(SERVER_REALITY, sb_client("hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo", true));
+    REQUIRE(ok.ok);
+    CHECK(ok.compatibility_errors == 0);
+    CHECK_FALSE(has_tag(ok, "client-fingerprint"));
+    ConfigAudit bad = audit_config_pair(SERVER_REALITY, sb_client("3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08", true));
+    CHECK(has_tag(bad, "pair-reality-key"));
+    CHECK(bad.tspu_tier == "UNKNOWN");
+    // nothing secret in the report
+    const std::string json = config_audit_to_json(bad);
+    CHECK(json.find("dwdtCnMY") == std::string::npos);
+    CHECK(json.find("3p7bfXt9") == std::string::npos);
+    CHECK(json.find("\"u1\"") == std::string::npos);
+}
+
+TEST_CASE("client config: no utls means a go hello, plaintext only off loopback") {
+    ConfigAudit a = audit_config_text(sb_client("hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo", false));
+    REQUIRE(a.ok);
+    CHECK(has_tag(a, "client-fingerprint"));
+    const char* local = R"({"outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"127.0.0.1","port":1,
+      "users":[{"id":"u1"}]}]},"streamSettings":{"network":"raw","security":"none"}}]})";
+    CHECK_FALSE(has_tag(audit_config_text(local), "client-plaintext"));
+    const char* remote = R"({"outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"203.0.113.10","port":1,
+      "users":[{"id":"u1"}]}]},"streamSettings":{"network":"raw","security":"none"}}]})";
+    CHECK(has_tag(audit_config_text(remote), "client-plaintext"));
+}
+
 TEST_CASE("clean Reality config passes") {
     const char* cfg = R"({
       "inbounds": [{

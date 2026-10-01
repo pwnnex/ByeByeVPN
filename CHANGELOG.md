@@ -1,5 +1,34 @@
 # Changelog
 
+## unreleased
+
+### new: `dpi --sni NAME --real IP|auto`
+
+The name your node serves goes to the node and to the address the name
+really lives on, with a benign name to the node as control, until two
+rounds agree. Fails to the node and passes to its own address: this path
+ties the name to its address (F10, the rule blamed for Reality with brand
+targets). Fails to both: the name itself is blocked here. Lab runs SM,
+SP, SB, SD, SR against a box emulated by a server that drops one SNI
+silently.
+
+### new: `names <domain> --ct`
+
+Every name under the domain that public certificate transparency logs
+hold, from crt.sh or a saved JSON (`--ct-file`), through the hostname
+markers. `--resolve` and `--node IP` show which names share an address
+with your node. A failed lookup exits 4. One retry when crt.sh answers 5xx.
+
+### new: client configs and server/client pairs in `audit-config`
+
+Client checks for proxy outbounds: plaintext VLESS or Trojan, no browser
+fingerprint, no server name, certificate checks off, malformed REALITY key
+or shortId. `audit-config <server> <client>` matches every client outbound
+to the server inbound on its port and reports each mismatch that stops the
+pair from connecting, including a REALITY publicKey that does not belong
+to the server's privateKey (checked with X25519). Xray and sing-box in any
+mix. 23 new fixtures, keys from the RFC 7748 vectors.
+
 ## v3.0.0 - 2026-10-01
 
 A major version: the verdict engine, the scored signal set, the exit codes

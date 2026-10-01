@@ -173,28 +173,53 @@ def render(tag, exe, cells, rows, notes):
     return "\n".join(out) + "\n"
 
 
-# client-side volume runs: (name, target server or stand, path, control server, expected outcome)
-VOLUME_CASES = [
-    ("VZ", "Z", "/big", "V2", "positive"),
-    ("VV", "V", "/big", "V2", "negative"),
-    ("VY", "Y", "/big", "V2", "negative"),
-    ("VT", "T", "/big", "V2", "inconclusive"),
-    ("VA", "A", "/", "V2", "not applicable"),
-    ("VC", "V", "/big", "Z", "inconclusive"),
-    ("VN", "V", "/big", None, "inconclusive"),
+# client-side runs: name, group that disables it, matrix row, address, dpi
+# arguments ("@X" is the address of server X), expected label
+CLIENT_CASES = [
+    ("VZ", "VOLUME", "volume-freeze", "Z", ["--volume", "/big", "--control", "@V2/big"], "positive"),
+    ("VV", "VOLUME", "volume-freeze", "V", ["--volume", "/big", "--control", "@V2/big"], "negative"),
+    ("VY", "VOLUME", "volume-freeze", "Y", ["--volume", "/big", "--control", "@V2/big"], "negative"),
+    ("VT", "VOLUME", "volume-freeze", "T", ["--volume", "/big", "--control", "@V2/big"], "inconclusive"),
+    ("VA", "VOLUME", "volume-freeze", "A", ["--volume", "/", "--control", "@V2/big"], "not applicable"),
+    ("VC", "VOLUME", "volume-freeze", "V", ["--volume", "/big", "--control", "@Z/big"], "inconclusive"),
+    ("VN", "VOLUME", "volume-freeze", "V", ["--volume", "/big"], "inconclusive"),
+    ("SM", "SNI", "sni-address", "N", ["--sni", lab.SNI_NAME, "--real", "@R"], "positive"),
+    ("SP", "SNI", "sni-address", "A", ["--sni", lab.SNI_NAME, "--real", "@R"], "negative"),
+    ("SB", "SNI", "sni-address", "N", ["--sni", lab.SNI_NAME, "--real", "@RB"], "inconclusive blocked"),
+    ("SD", "SNI", "sni-address", "H1", ["--sni", lab.SNI_NAME, "--real", "@R"], "inconclusive"),
+    ("SR", "SNI", "sni-address", "N", ["--sni", lab.SNI_NAME, "--real", "@H1"], "inconclusive"),
 ]
 
 
-def volume_ip(name):
-    return (lab.VOLUME_SERVERS.get(name) or lab.STANDS[name])["ip"]
+def client_ip(name):
+    for table in (lab.VOLUME_SERVERS, lab.SNI_SERVERS, lab.STANDS):
+        if name in table:
+            return table[name]["ip"]
+    raise KeyError(name)
 
 
-def run_volume(exe, case, outdir, timeout):
-    name, tgt, path, ctl, expected = case
-    ip = volume_ip(tgt)
-    cmd = [exe, "dpi", ip, "443", "--volume", path, "--json", "--no-color"]
-    if ctl:
-        cmd += ["--control", volume_ip(ctl) + "/big"]
+def client_args(args):
+    out = []
+    for a in args:
+        if a.startswith("@"):
+            name, _, rest = a[1:].partition("/")
+            a = client_ip(name) + ("/" + rest if rest else "")
+        out.append(a)
+    return out
+
+
+def client_label(so):
+    try:
+        rep = json.loads(so)
+    except ValueError:
+        return "?"
+    return rep.get("outcome", "?") + (" blocked" if rep.get("name_blocked") else "")
+
+
+def run_client(exe, case, outdir, timeout):
+    name, _, row, addr, args, expected = case
+    ip = client_ip(addr)
+    cmd = [exe, "dpi", ip, "443"] + client_args(args) + ["--json", "--no-color"]
     t0 = time.monotonic()
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -207,26 +232,21 @@ def run_volume(exe, case, outdir, timeout):
         f.write(so)
     with open(os.path.join(outdir, name + ".txt"), "w", encoding="utf-8") as f:
         f.write(se)
-    try:
-        outcome = json.loads(so).get("outcome", "?")
-    except ValueError:
-        outcome = "?"
-    return dict(name=name, ip=ip, outcome=outcome, expected=expected, code=code, secs=dt)
+    return dict(name=name, ip=ip, row=row, outcome=client_label(so), expected=expected, code=code, secs=dt)
 
 
-def volume_matrix(vres, cells, rows):
+def client_matrix(vres, cells, rows):
     for v in vres:
-        c = cells["volume-freeze"]
+        c = cells[v["row"]]
         fired, truth = v["outcome"] == "positive", v["expected"] == "positive"
-        if v["outcome"] in ("inconclusive", "not applicable", "?"):
+        if v["outcome"] != "positive" and v["outcome"] != "negative":
             c["INC"] += 1
         elif fired:
             c["TP" if truth else "FP"] += 1
         else:
             c["FN" if truth else "TN"] += 1
-        rows.append((v["name"], v["ip"], v["outcome"], None, "dpi --volume", "-", v["code"], v["secs"],
+        rows.append((v["name"], v["ip"], v["outcome"], None, "dpi " + v["row"], "-", v["code"], v["secs"],
                      v["outcome"] == v["expected"]))
-
 
 def annotate(msg):
     # actions turns these into annotations, readable without a login
@@ -294,16 +314,13 @@ def main():
                 meta = json.load(open(mp, encoding="utf-8"))
             results.append(dict(name=n, code=meta["exit"], secs=meta["secs"], rep=rep, text=se + so))
         vres = []
-        for c in VOLUME_CASES:
+        for c in CLIENT_CASES:
             js = os.path.join(outdir, c[0] + ".json")
             if os.path.isfile(js) and (not a.only or c[0] in a.only.split(",")):
-                try:
-                    outcome = json.loads(open(js, encoding="utf-8").read()).get("outcome", "?")
-                except ValueError:
-                    outcome = "?"
-                vres.append(dict(name=c[0], ip=volume_ip(c[1]), outcome=outcome, expected=c[4], code="?", secs=0.0))
+                vres.append(dict(name=c[0], ip=client_ip(c[3]), row=c[2], expected=c[5], code="?", secs=0.0,
+                                 outcome=client_label(open(js, encoding="utf-8").read())))
         cells, rows = matrix(results)
-        volume_matrix(vres, cells, rows)
+        client_matrix(vres, cells, rows)
         md = render(a.tag + " (rescored)", exe, cells, rows, {"rescored": "same rules as a fresh run"})
         with open(os.path.join(outdir, "matrix.md"), "w", encoding="utf-8") as f:
             f.write(md)
@@ -326,11 +343,12 @@ def main():
         notes["skipped"] = " ".join(skipped)
         names = [n for n in names if n not in lab.DISABLED]
     results, vres = [], []
-    cases = [c for c in VOLUME_CASES if not a.only or c[0] in a.only.split(",")]
-    if cases and "VOLUME" in lab.DISABLED:
-        skipped += [c[0] for c in cases]
+    cases = [c for c in CLIENT_CASES if not a.only or c[0] in a.only.split(",")]
+    off = [c for c in cases if c[1] in lab.DISABLED]
+    if off:
+        skipped += [c[0] for c in off]
         notes["skipped"] = " ".join(skipped)
-        cases = []
+        cases = [c for c in cases if c not in off]
     try:
         time.sleep(1)
         for n in names:
@@ -340,15 +358,15 @@ def main():
                 n, r["rep"].get("label"), r["rep"].get("score"), r["code"], r["secs"]))
             results.append(r)
         for c in cases:
-            lab.log("volume %s (%s)" % (c[0], volume_ip(c[1])))
-            v = run_volume(exe, c, outdir, a.timeout)
+            lab.log("client %s %s (%s)" % (c[0], c[2], client_ip(c[3])))
+            v = run_client(exe, c, outdir, a.timeout)
             lab.log("  %s outcome=%s expected=%s exit=%s %.0fs" % (
                 v["name"], v["outcome"], v["expected"], v["code"], v["secs"]))
             vres.append(v)
     finally:
         lab.stop_all(st, procs)
     cells, rows = matrix(results)
-    volume_matrix(vres, cells, rows)
+    client_matrix(vres, cells, rows)
     md = render(a.tag, exe, cells, rows, notes)
     with open(os.path.join(outdir, "matrix.md"), "w", encoding="utf-8") as f:
         f.write(md)

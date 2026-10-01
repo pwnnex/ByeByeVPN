@@ -63,5 +63,10 @@ ConfigAudit audit_wireguard_ini(const std::string& text);
 // ok=false and err set.
 ConfigAudit audit_config_text(const std::string& text);
 
+// a server config next to the client config that talks to it: client checks
+// plus every mismatch that stops the pair from connecting. no secret is
+// printed, only whether it matches.
+ConfigAudit audit_config_pair(const std::string& server_text, const std::string& client_text);
+
 // serialize an audit result to a machine-readable json object (for --json).
 std::string config_audit_to_json(const ConfigAudit& a);

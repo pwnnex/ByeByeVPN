@@ -79,6 +79,8 @@ set(BBVPN_SOURCES
     src/scan/dpi_probe.cpp
     src/scan/volume_probe.cpp
     src/scan/volume_analysis.cpp
+    src/scan/sni_mismatch.cpp
+    src/scan/ct_names.cpp
     src/scan/ech.cpp
     src/scan/ech_query.cpp
 

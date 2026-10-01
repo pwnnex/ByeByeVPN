@@ -44,3 +44,30 @@ sb-reality-shortid-ok.json         -reality-shortid-invalid +reality-shortid-emp
 sb-reality-no-server.json          +reality-target-missing
 
 xray-reality-show.json             +reality-show cat:reality-show=hygiene tier=PASS
+
+# client configs: what the box sees from the client side
+client-ok.json                     -client-fingerprint -client-plaintext -client-sni-missing -client-insecure -client-reality-key -client-shortid
+client-reality-no-fp.json          +client-fingerprint
+client-tls-no-fp.json              +client-fingerprint
+sb-client-ok.json                  -client-fingerprint -client-reality-key
+sb-client-no-utls.json             +client-fingerprint
+client-insecure.json               +client-insecure cat:client-insecure=hygiene -client-fingerprint
+client-tls-no-sni.json             +client-sni-missing
+client-plaintext.json              +client-plaintext
+client-vmess-none.json             -client-plaintext
+client-local-plain.json            -client-plaintext
+client-bad-pubkey.json             +client-reality-key tier=UNKNOWN
+
+# server + client: everything that stops the pair from connecting
+pair-server-reality.json+client-ok.json           -pair-no-inbound -pair-protocol -pair-transport -pair-security -pair-user -pair-flow -pair-reality-sni -pair-reality-shortid -pair-reality-key tier=PASS
+pair-server-reality.json+sb-client-ok.json        -pair-transport -pair-security -pair-user -pair-flow -pair-reality-key tier=PASS
+pair-server-reality.json+client-wrong-key.json    +pair-reality-key tier=UNKNOWN
+pair-server-reality.json+sb-client-wrong-key.json +pair-reality-key
+pair-server-reality.json+client-wrong-shortid.json +pair-reality-shortid -pair-reality-key
+pair-server-reality.json+client-wrong-sni.json    +pair-reality-sni -pair-reality-key
+pair-server-reality.json+client-wrong-user.json   +pair-user -pair-flow
+pair-server-reality.json+client-no-flow.json      +pair-flow -pair-user
+pair-server-reality.json+client-wrong-port.json   +pair-no-inbound
+pair-server-reality.json+client-ws-to-reality.json +pair-transport +pair-security
+pair-server-ws.json+client-ws-same.json           -pair-path -pair-transport -pair-security -pair-flow
+pair-server-ws.json+client-ws-path.json           +pair-path

@@ -282,6 +282,33 @@ string passed by value, a self-assigning `substr`, a widening cast in
 `ports.cpp`, and a cppcheck misreading of `std::array` copies in
 `wg_handshake.cpp`.
 
+## 2026-10-01, unreleased: names --ct, client and pair audit, dpi --real
+
+Run `v3.1-sni-ct-pair`: the 29 runs of v3.0.0 plus five `dpi --sni --real`
+runs on an emulated box that drops one name.
+
+| run | outcome | expected |
+|---|---|---|
+| SM | positive (node silent, real address replies, two rounds) | positive |
+| SP | negative | negative |
+| SB | inconclusive, name blocked | inconclusive, name blocked |
+| SD | inconclusive (node down) | inconclusive |
+| SR | inconclusive (real address down) | inconclusive |
+
+| signal or claim | TP | FP | TN | FN | INC |
+|---|---|---|---|---|---|
+| sni-address | 1 | 0 | 1 | 0 | 3 |
+
+Every other row as in the v3.0.0 entry; J was INCONCLUSIVE this time
+(sstp INC 2, verdict INC 11), both labels accepted. 0 FP, 34 of 34, exit 0.
+
+Offline checks: audit fixtures 57 files, 0 failures (23 new client and
+pair files, look-alikes included); `names --ct` from saved crt.sh
+answers, look-alikes `subway.`, `notexample.com`, `example.com.evil.net`
+and a mail address all dropped or unmarked. A live crt.sh query could not
+be made on 2026-10-01: crt.sh answered 502 to every request, including
+plain ones outside this tool; the command exits 4 there, as designed.
+
 ## Field log
 
 Your own nodes: date, scanner version, verdict, what happened to the node

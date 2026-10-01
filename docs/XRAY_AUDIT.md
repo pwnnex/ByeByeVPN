@@ -117,6 +117,32 @@ build from before this change all look-alikes passed and every new
 positive failed, as expected; the one old false positive was the sing-box
 case above.
 
+## Client configs and server/client pairs
+
+A config with proxy outbounds (Xray `outbounds[].protocol`, sing-box
+`outbounds[].type`: vless, vmess, trojan, shadowsocks, hysteria2, tuic)
+gets client checks, with or without inbounds:
+
+| Tag | Category | Fires on | Must not fire on |
+| --- | --- | --- | --- |
+| `client-plaintext` | exposure, High | VLESS or Trojan without TLS or REALITY to a remote address | VMess without outer TLS (own crypto); a loopback address |
+| `client-fingerprint` | exposure, Medium | TLS or REALITY without `fingerprint` (Xray) or `tls.utls` (sing-box): the Go ClientHello, or a refused REALITY, depending on the core | `fingerprint: chrome`; sing-box `utls.enabled` without a name (chrome) |
+| `client-sni-missing` | exposure, Medium | TLS or REALITY without a server name | a set serverName |
+| `client-insecure` | hygiene, High | `allowInsecure` / `insecure`: anyone on the path can pose as the server | certificate checks on |
+| `client-reality-key`, `client-shortid` | compatibility | publicKey not a 32-byte base64url key; shortId not even-length hex up to 16 | a real key, `0123abcd` |
+
+`audit-config <server> <client>` normalises both sides (Xray or sing-box,
+in any combination) and matches each client outbound to the server
+inbound on its port. Every mismatch is a compatibility error (exit 65):
+`pair-no-inbound`, `pair-protocol`, `pair-transport`, `pair-security`,
+`pair-path` (ws, httpupgrade, xhttp path or gRPC serviceName), `pair-user`,
+`pair-flow`, `pair-reality-sni`, `pair-reality-shortid`, and
+`pair-reality-key`, which derives the X25519 public key from the server's
+privateKey and compares it with the client's publicKey. No id, password
+or key is printed or written to JSON, only whether it matches. Fixtures:
+`tests/fixtures/audit/pair-*` with `client-*`, keys from the RFC 7748
+vectors.
+
 ## Verification
 
 ```powershell

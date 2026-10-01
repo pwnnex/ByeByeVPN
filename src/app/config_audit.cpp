@@ -2,6 +2,7 @@
 #include "config_audit.h"
 #include "../common/util.h"
 #include "../scan/brand.h"
+#include "../scan/wg_handshake.h"
 
 #include <algorithm>
 #include <cctype>
@@ -837,14 +838,332 @@ vector<const JsonValue*> collect_inbounds(const JsonValue& root) {
     return out;
 }
 
+// one proxy listener or one proxy client in a common shape, for the pair check
+struct Endpoint {
+    int    idx = 0;
+    bool   client = false;
+    string proto, address, network = "raw", security = "none", path, where;
+    int    port = -1;
+    vector<string> names;       // server: accepted sni, client: the one it sends
+    vector<string> short_ids;
+    string reality_key;         // server: private, client: public
+    vector<std::pair<string, string>> users;   // id or password, flow
+    string fingerprint;         // client only
+    bool   insecure = false;
+};
+
+bool proxy_proto(const string& p) {
+    static const std::set<string> s = {"vless", "vmess", "trojan", "shadowsocks", "hysteria2", "tuic", "hysteria"};
+    return s.count(p) > 0;
+}
+
+vector<string> str_list(const JsonValue& v) {
+    vector<string> o;
+    if (v.is_arr()) for (size_t i = 0; i < v.size(); ++i) o.push_back(v.at(i).as_str());
+    else if (v.is_str()) o.push_back(v.as_str());
+    return o;
+}
+
+string xray_path(const JsonValue& ss, const string& net) {
+    if (net == "websocket") return ss["wsSettings"]["path"].as_str();
+    if (net == "httpupgrade") return ss["httpupgradeSettings"]["path"].as_str();
+    if (net == "grpc") return ss["grpcSettings"]["serviceName"].as_str();
+    if (net == "xhttp") {
+        string p = ss["xhttpSettings"]["path"].as_str();
+        return p.empty() ? ss["splithttpSettings"]["path"].as_str() : p;
+    }
+    return {};
+}
+
+string sb_network(const JsonValue& t) {
+    string ty = tolower_s(t["type"].as_str());
+    if (ty.empty()) return "raw";
+    if (ty == "ws") return "websocket";
+    if (ty == "http") return "h2";
+    return ty;
+}
+
+string sb_path(const JsonValue& t) {
+    string p = t["path"].as_str();
+    return p.empty() ? t["service_name"].as_str() : p;
+}
+
+string sec_of(const JsonValue& ss) {
+    string s = tolower_s(ss["security"].as_str("none"));
+    return s.empty() ? "none" : s;
+}
+
+Endpoint xray_server(const JsonValue& in, int idx) {
+    Endpoint e;
+    e.idx = idx;
+    e.proto = tolower_s(in["protocol"].as_str());
+    e.port = json_port(in["port"]);
+    const auto& st = in["settings"];
+    const auto& ss = in["streamSettings"];
+    e.network = xray_transport(ss);
+    e.security = sec_of(ss);
+    e.path = xray_path(ss, e.network);
+    const auto& users = !st["clients"].is_null() ? st["clients"] : st["users"];
+    const string dflow = st["flow"].as_str();
+    for (size_t i = 0; i < users.size(); ++i) {
+        const auto& u = users.at(i);
+        string id = u["id"].as_str();
+        if (id.empty()) id = u["password"].as_str();
+        string fl = u["flow"].as_str();
+        e.users.emplace_back(id, fl.empty() ? dflow : fl);
+    }
+    if (!st["password"].as_str().empty()) e.users.emplace_back(st["password"].as_str(), "");
+    const auto& rs = ss["realitySettings"];
+    e.names = str_list(rs["serverNames"]);
+    e.short_ids = str_list(rs["shortIds"]);
+    e.reality_key = rs["privateKey"].as_str();
+    e.where = "inbound[" + std::to_string(idx) + "] " + e.proto + (e.port > 0 ? " :" + std::to_string(e.port) : "");
+    return e;
+}
+
+Endpoint singbox_server(const JsonValue& in, int idx) {
+    Endpoint e;
+    e.idx = idx;
+    e.proto = tolower_s(in["type"].as_str());
+    e.port = json_port(in["listen_port"]);
+    const auto& tls = in["tls"];
+    const bool tls_en = tls["enabled"].as_bool();
+    e.security = !tls_en ? "none" : tls["reality"]["enabled"].as_bool() ? "reality" : "tls";
+    e.network = sb_network(in["transport"]);
+    e.path = sb_path(in["transport"]);
+    const auto& users = in["users"];
+    for (size_t i = 0; i < users.size(); ++i) {
+        const auto& u = users.at(i);
+        string id = u["uuid"].as_str();
+        if (id.empty()) id = u["password"].as_str();
+        e.users.emplace_back(id, u["flow"].as_str());
+    }
+    if (!in["password"].as_str().empty()) e.users.emplace_back(in["password"].as_str(), "");
+    e.names = str_list(tls["server_name"]);
+    e.short_ids = str_list(tls["reality"]["short_id"]);
+    e.reality_key = tls["reality"]["private_key"].as_str();
+    e.where = "inbound[" + std::to_string(idx) + "] " + e.proto + (e.port > 0 ? " :" + std::to_string(e.port) : "");
+    return e;
+}
+
+Endpoint xray_client(const JsonValue& out, int idx) {
+    Endpoint e;
+    e.idx = idx;
+    e.client = true;
+    e.proto = tolower_s(out["protocol"].as_str());
+    const auto& st = out["settings"];
+    const auto& ss = out["streamSettings"];
+    // vnext, servers, or the flat form newer cores accept
+    const JsonValue* srv = &st;
+    if (st["vnext"].is_arr() && st["vnext"].size()) srv = &st["vnext"].at(0);
+    else if (st["servers"].is_arr() && st["servers"].size()) srv = &st["servers"].at(0);
+    e.address = (*srv)["address"].as_str();
+    e.port = json_port((*srv)["port"]);
+    const auto& users = (*srv)["users"];
+    string id, flow;
+    if (users.is_arr() && users.size()) { id = users.at(0)["id"].as_str(); flow = users.at(0)["flow"].as_str(); }
+    else { id = (*srv)["id"].as_str(); flow = (*srv)["flow"].as_str(); }
+    if (id.empty()) id = (*srv)["password"].as_str();
+    e.users.emplace_back(id, flow);
+    e.network = xray_transport(ss);
+    e.security = sec_of(ss);
+    e.path = xray_path(ss, e.network);
+    if (e.security == "reality") {
+        const auto& rs = ss["realitySettings"];
+        e.names = {rs["serverName"].as_str()};
+        e.short_ids = {rs["shortId"].as_str()};
+        // newer cores print the public key as "password"
+        e.reality_key = rs["publicKey"].as_str();
+        if (e.reality_key.empty()) e.reality_key = rs["password"].as_str();
+        e.fingerprint = rs["fingerprint"].as_str();
+    } else if (e.security == "tls") {
+        const auto& ts = ss["tlsSettings"];
+        e.names = {ts["serverName"].as_str()};
+        e.fingerprint = ts["fingerprint"].as_str();
+        e.insecure = ts["allowInsecure"].as_bool();
+    }
+    e.where = "outbound[" + std::to_string(idx) + "] " + e.proto + (e.port > 0 ? " :" + std::to_string(e.port) : "");
+    return e;
+}
+
+Endpoint singbox_client(const JsonValue& out, int idx) {
+    Endpoint e;
+    e.idx = idx;
+    e.client = true;
+    e.proto = tolower_s(out["type"].as_str());
+    e.address = out["server"].as_str();
+    e.port = json_port(out["server_port"]);
+    string id = out["uuid"].as_str();
+    if (id.empty()) id = out["password"].as_str();
+    e.users.emplace_back(id, out["flow"].as_str());
+    const auto& tls = out["tls"];
+    const bool tls_en = tls["enabled"].as_bool();
+    const auto& rl = tls["reality"];
+    e.security = !tls_en ? "none" : rl["enabled"].as_bool() ? "reality" : "tls";
+    e.network = sb_network(out["transport"]);
+    e.path = sb_path(out["transport"]);
+    if (tls_en) {
+        e.names = {tls["server_name"].as_str()};
+        e.insecure = tls["insecure"].as_bool();
+        // utls on without a name means chrome
+        if (tls["utls"]["enabled"].as_bool()) e.fingerprint = tls["utls"]["fingerprint"].as_str("chrome");
+        if (e.fingerprint.empty() && tls["utls"]["enabled"].as_bool()) e.fingerprint = "chrome";
+    }
+    if (e.security == "reality") {
+        e.short_ids = {rl["short_id"].as_str()};
+        e.reality_key = rl["public_key"].as_str();
+    }
+    e.where = "outbound[" + std::to_string(idx) + "] " + e.proto + (e.port > 0 ? " :" + std::to_string(e.port) : "");
+    return e;
+}
+
+vector<Endpoint> client_endpoints(const JsonValue& root) {
+    vector<Endpoint> out;
+    const auto& ob = root["outbounds"];
+    for (size_t i = 0; ob.is_arr() && i < ob.size(); ++i) {
+        const auto& o = ob.at(i);
+        if (!o.is_obj()) continue;
+        if (o.has("protocol") && proxy_proto(tolower_s(o["protocol"].as_str()))) out.push_back(xray_client(o, (int)i));
+        else if (o.has("type") && proxy_proto(tolower_s(o["type"].as_str()))) out.push_back(singbox_client(o, (int)i));
+    }
+    return out;
+}
+
+vector<Endpoint> server_endpoints(const JsonValue& root) {
+    vector<Endpoint> out;
+    const auto ins = collect_inbounds(root);
+    for (size_t i = 0; i < ins.size(); ++i) {
+        const auto& in = *ins[i];
+        if (!in.is_obj()) continue;
+        if (in.has("protocol") && proxy_proto(tolower_s(in["protocol"].as_str()))) out.push_back(xray_server(in, (int)i));
+        else if (in.has("type") && proxy_proto(tolower_s(in["type"].as_str()))) out.push_back(singbox_server(in, (int)i));
+    }
+    return out;
+}
+
+void finding(ConfigAudit& A, AuditFinding::Sev sev, const char* category, const string& tag,
+             const string& where, const string& title, const string& fix) {
+    AuditFinding f;
+    f.sev = sev; f.category = category; f.tag = tag; f.where = where; f.title = title; f.fix = fix;
+    A.findings.push_back(std::move(f));
+}
+
+// what the box sees from the client side, and what breaks it
+void client_checks(ConfigAudit& A, const vector<Endpoint>& clients) {
+    using Sev = AuditFinding::Sev;
+    for (const auto& c : clients) {
+        const bool encrypted = c.security == "tls" || c.security == "reality";
+        if ((c.proto == "vless" || c.proto == "trojan") && !encrypted && !local_listener(c.address))
+            finding(A, Sev::High, "exposure", "client-plaintext", c.where,
+                c.proto + " to " + c.address + " has neither TLS nor REALITY; the protocol header travels in the clear.",
+                "Enable TLS or REALITY on both ends.");
+        if (encrypted && c.fingerprint.empty())
+            finding(A, Sev::Medium, "exposure", "client-fingerprint", c.where,
+                "No browser fingerprint is set. Depending on the core this sends the Go TLS ClientHello, "
+                "which no browser sends, or refuses REALITY outright.",
+                "Set fingerprint (Xray) or tls.utls (sing-box) to chrome or firefox.");
+        const string sni = c.names.empty() ? string() : c.names.front();
+        if (encrypted && sni.empty())
+            finding(A, Sev::Medium, "exposure", "client-sni-missing", c.where,
+                c.security == "reality" ? "REALITY without serverName: there is no site to look like."
+                                        : "TLS without a server name: no SNI goes out, unlike any browser.",
+                "Set serverName (Xray) or tls.server_name (sing-box).");
+        if (c.insecure)
+            finding(A, Sev::High, "hygiene", "client-insecure", c.where,
+                "Certificate checks are off: anyone on the path can pose as the server. An observer sees no difference.",
+                "Remove allowInsecure / insecure and use a certificate the client can verify.");
+        if (c.security == "reality") {
+            WgKey k;
+            if (c.reality_key.empty() || !wg_key_from_base64(c.reality_key, k))
+                finding(A, Sev::High, "compatibility", "client-reality-key", c.where,
+                    "REALITY publicKey is missing or is not a 32-byte base64url key.",
+                    "Copy the public key printed next to the server's private key.");
+            if (!c.short_ids.empty() && !valid_short_id(c.short_ids.front()))
+                finding(A, Sev::High, "compatibility", "client-shortid", c.where,
+                    "REALITY shortId must have 0 to 16 hexadecimal characters and an even length.",
+                    "Use one of the server's shortIds.");
+        }
+    }
+}
+
+string flow_of(const string& f) { return f.empty() ? "none" : f; }
+
+// a client next to the server config it talks to
+void pair_checks(ConfigAudit& A, const vector<Endpoint>& servers, const vector<Endpoint>& clients) {
+    using Sev = AuditFinding::Sev;
+    auto bad = [&](const string& tag, const string& where, const string& title, const string& fix) {
+        finding(A, Sev::High, "compatibility", tag, where, title, fix);
+    };
+    for (const auto& c : clients) {
+        if (c.port < 0) continue;
+        const Endpoint* s = nullptr;
+        for (const auto& x : servers)
+            if (x.port == c.port && (!s || (x.proto == c.proto && s->proto != c.proto))) s = &x;
+        if (!s) {
+            bad("pair-no-inbound", c.where, "No server inbound listens on port " + std::to_string(c.port) + ".",
+                "Point the client at the inbound's port, or add the inbound.");
+            continue;
+        }
+        const string at = c.where + " -> " + s->where;
+        if (s->proto != c.proto) {
+            bad("pair-protocol", at, "The client speaks " + c.proto + ", the inbound " + s->proto + ".",
+                "Use the same protocol on both ends.");
+            continue;
+        }
+        if (s->network != c.network)
+            bad("pair-transport", at, "Transport differs: client " + c.network + ", server " + s->network + ".",
+                "Use the same transport on both ends.");
+        if (s->security != c.security)
+            bad("pair-security", at, "Security differs: client " + c.security + ", server " + s->security + ".",
+                "Use the same security mode on both ends.");
+        if (s->network == c.network && s->path != c.path && (!s->path.empty() || !c.path.empty()))
+            bad("pair-path", at, "Path or service name differs between client and server.",
+                "Copy the server's path or serviceName into the client.");
+        const string id = c.users.empty() ? string() : c.users.front().first;
+        const auto user = std::find_if(s->users.begin(), s->users.end(),
+                                       [&](const std::pair<string, string>& u) { return u.first == id; });
+        if (!id.empty() && !s->users.empty() && user == s->users.end())
+            bad("pair-user", at, "The client's id or password is not among the server's users.",
+                "Copy the user's id or password from the server.");
+        else if (user != s->users.end() && c.proto == "vless" && flow_of(user->second) != flow_of(c.users.front().second))
+            bad("pair-flow", at, "Flow differs: client " + flow_of(c.users.front().second) + ", server " + flow_of(user->second) + ".",
+                "Use the same flow on both ends.");
+        if (s->security == "reality" && c.security == "reality") {
+            const string sni = c.names.empty() ? string() : c.names.front();
+            if (!sni.empty() && !s->names.empty() && std::find(s->names.begin(), s->names.end(), sni) == s->names.end())
+                bad("pair-reality-sni", at, "The client's serverName is not in the server's serverNames.",
+                    "Use one of the server's serverNames.");
+            const string sid = c.short_ids.empty() ? string() : c.short_ids.front();
+            if (!s->short_ids.empty() && std::find(s->short_ids.begin(), s->short_ids.end(), sid) == s->short_ids.end())
+                bad("pair-reality-shortid", at, "The client's shortId is not in the server's shortIds.",
+                    "Use one of the server's shortIds.");
+            WgKey priv, pub, derived;
+            if (wg_key_from_base64(s->reality_key, priv) && wg_key_from_base64(c.reality_key, pub) &&
+                wgc::pub(priv, derived) && derived != pub)
+                bad("pair-reality-key", at, "The client's publicKey does not belong to the server's privateKey.",
+                    "Copy the public key printed together with this private key.");
+        }
+    }
+}
+
 } // namespace
 
 ConfigAudit audit_config_json(const JsonValue& root) {
     ConfigAudit A;
     vector<const JsonValue*> inbounds = collect_inbounds(root);
+    const vector<Endpoint> clients = root.is_obj() ? client_endpoints(root) : vector<Endpoint>{};
+    // a client config may have no inbound at all
+    if (inbounds.empty() && !clients.empty()) {
+        A.ok = true;
+        A.format = root["outbounds"].at(clients.front().idx).has("protocol") ? "xray" : "sing-box";
+        client_checks(A, clients);
+        if (root.is_obj()) Auditor{A}.root_checks(root, A.format == "xray");
+        finalize_audit(A);
+        return A;
+    }
     if (inbounds.empty()) {
         A.ok = false;
-        A.err = "no inbounds found (not an Xray/sing-box config, or empty)";
+        A.err = "no inbounds or proxy outbounds found (not an Xray/sing-box config, or empty)";
         return A;
     }
     for (const auto* in : inbounds) {
@@ -914,7 +1233,32 @@ ConfigAudit audit_config_json(const JsonValue& root) {
     }
     if (root.is_obj()) au.root_checks(root, A.format == "xray");
     au.finish();
+    client_checks(A, clients);
 
+    finalize_audit(A);
+    return A;
+}
+
+ConfigAudit audit_config_pair(const string& server_text, const string& client_text) {
+    ConfigAudit A;
+    bool ok1 = false, ok2 = false;
+    const JsonValue server = json_parse(server_text, &ok1);
+    const JsonValue client = json_parse(client_text, &ok2);
+    if (!ok1 || !ok2) {
+        A.err = string("parse failed in the ") + (!ok1 ? "server" : "client") + " config (invalid or duplicate-key JSON)";
+        return A;
+    }
+    const auto servers = server_endpoints(server);
+    const auto clients = client_endpoints(client);
+    if (servers.empty() || clients.empty()) {
+        A.err = servers.empty() ? "no proxy inbound in the server config" : "no proxy outbound in the client config";
+        return A;
+    }
+    A.ok = true;
+    A.format = "pair";
+    A.inbound_count = (int)servers.size();
+    client_checks(A, clients);
+    pair_checks(A, servers, clients);
     finalize_audit(A);
     return A;
 }

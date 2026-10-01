@@ -1,0 +1,31 @@
+{
+  "inbounds": [
+    {
+      "protocol": "vless",
+      "port": 8443,
+      "settings": {
+        "decryption": "none",
+        "clients": [
+          {
+            "id": "5f2e1a44-7d1c-4c6a-9b36-2a8c1e0f9d11"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "wsSettings": {
+          "path": "/a"
+        },
+        "tlsSettings": {
+          "certificates": [
+            {
+              "certificateFile": "/x",
+              "keyFile": "/y"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

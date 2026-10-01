@@ -1,0 +1,4 @@
+[
+  {"id": 201, "common_name": "example.org", "name_value": "example.org\nwww.example.org\nsubway.example.org\npanelists.example.org", "not_before": "2025-02-02T00:00:00"},
+  {"id": 202, "common_name": "mail.example.org", "name_value": "mail.example.org\nadmin@example.org", "not_before": "2025-02-03T00:00:00"}
+]

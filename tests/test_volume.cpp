@@ -93,6 +93,35 @@ TEST_CASE("control endpoints parse strictly") {
     CHECK_FALSE(volume_parse_endpoint("host/a\r\nX: y", h, port, p));
 }
 
+TEST_CASE("sni and address: positive only when the real address answers the same name") {
+    using E = ChEnd;
+    const SniRound mismatch{E::Silent, E::Reply, E::Reply};
+    const SniRound reset_mismatch{E::Reset, E::Reply, E::Reply};
+    const SniRound passes{E::Reply, E::Reply, E::Reply};
+    const SniRound blocked{E::Silent, E::Reply, E::Silent};
+    CHECK(sni_round_verdict(mismatch) == SniRoundVerdict::Mismatch);
+    CHECK(sni_round_verdict(reset_mismatch) == SniRoundVerdict::Mismatch);
+    CHECK(sni_round_verdict(passes) == SniRoundVerdict::Passes);
+    CHECK(sni_round_verdict(blocked) == SniRoundVerdict::NameBlocked);
+    // lab SD: the node itself is dead, nothing is compared
+    CHECK(sni_round_verdict({E::Silent, E::Silent, E::Reply}) == SniRoundVerdict::Unclear);
+    // the real address unreachable is not a pass for the node
+    CHECK(sni_round_verdict({E::Silent, E::Reply, E::NoTcp}) == SniRoundVerdict::Unclear);
+    CHECK(sni_round_verdict({E::NoTcp, E::NoTcp, E::Reply}) == SniRoundVerdict::Unclear);
+
+    auto v = sni_mismatch_verdict({mismatch, reset_mismatch});
+    CHECK(v.outcome == Outcome::Positive);
+    CHECK_FALSE(v.name_blocked);
+    // one round is not enough
+    CHECK(sni_mismatch_verdict({mismatch}).outcome == Outcome::Inconclusive);
+    CHECK(sni_mismatch_verdict({mismatch, passes, mismatch}).outcome == Outcome::Inconclusive);
+    CHECK(sni_mismatch_verdict({passes, passes}).outcome == Outcome::Negative);
+    v = sni_mismatch_verdict({blocked, blocked});
+    CHECK(v.outcome == Outcome::Inconclusive);
+    CHECK(v.name_blocked);
+    CHECK(v.reason.find("whatever the address") != std::string::npos);
+}
+
 TEST_CASE("sni check maps onto the shared four outcomes") {
     DpiProbe d;
     d.ran = true;

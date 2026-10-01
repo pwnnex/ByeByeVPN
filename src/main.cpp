@@ -82,6 +82,12 @@ int main(int argc, char** argv) {
         else if (a == "--wg-psk"    && i + 1 < argc) g_wg_psk    = argv[++i];
         else if (a == "--volume"    && i + 1 < argc) g_volume_path    = argv[++i];
         else if (a == "--control"   && i + 1 < argc) g_volume_control = argv[++i];
+        else if (a == "--sni"       && i + 1 < argc) g_dpi_sni        = argv[++i];
+        else if (a == "--ct")                        g_names_ct       = true;
+        else if (a == "--ct-file"   && i + 1 < argc) { g_ct_file = argv[++i]; g_names_ct = true; }
+        else if (a == "--resolve")                   g_resolve        = true;
+        else if (a == "--node"      && i + 1 < argc) { g_node_ip = argv[++i]; g_resolve = true; }
+        else if (a == "--real"      && i + 1 < argc) g_dpi_real       = argv[++i];
         else if (a == "--wg-port"   && i + 1 < argc) {
             int p = std::atoi(argv[++i]);
             if (p > 0 && p < 65536) g_wg_port = p;

@@ -56,6 +56,16 @@ extern int         g_wg_port;
 extern std::string g_volume_path;
 extern std::string g_volume_control;
 
+// dpi --sni NAME --real IP|auto: the same name to the node and to its own address
+extern std::string g_dpi_sni;
+extern std::string g_dpi_real;
+
+// names --ct [--ct-file F] [--resolve] [--node IP]
+extern bool        g_names_ct;
+extern std::string g_ct_file;
+extern bool        g_resolve;
+extern std::string g_node_ip;
+
 // --json: emit a machine-readable json report on stdout. when set, the
 // human-readable scan output is redirected to stderr so stdout carries
 // only the json object (pipe-friendly).

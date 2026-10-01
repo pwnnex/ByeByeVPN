@@ -103,6 +103,21 @@ score; every result prints and serialises the scope sentence.
 | test | VZ (emulated freeze after 14000 B of body, positive), VV and VY (negative), VT, VC, VN (inconclusive), VA (not applicable); test_volume.cpp |
 | limits | a loopback stand can emulate the node's side of a freeze, not the operator. No real F7 freeze has been measured with this code yet. The result holds for this client, this operator, this moment; a pass today says nothing about another subscriber or tomorrow |
 
+### sni-address (`dpi --sni NAME --real IP|auto`)
+
+| field | value |
+|---|---|
+| claim | on this path the node's name fails to the node and passes to the address it really lives on: a rule ties the name to its address (F10) |
+| evidence | per round three ClientHellos with the same builder as `dpi`: the name to the node, a benign name to the node, the name to the real address. Positive round: node + name reset or silent, node + benign replies, real + name replies |
+| false-positive modes | (1) the node is down or filtered: node + benign must reply (lab SD). (2) the real address unreachable: real + name must reply (lab SR). (3) the name blocked everywhere on the path: reported as blocked, not as the address rule (lab SB). (4) one flaky round: two agreeing rounds out of at most three. (5) a node that ignores the name itself (Reality with another serverName): looks the same as the rule; run it with the serverName the node really serves |
+| control | node + benign and real + name in every round |
+| repeats | until two rounds agree, at most three, 0.7 s apart |
+| inconclusive when | rounds disagree, a control fails, or the name fails to both addresses (then `name_blocked` is set and the exit code is 2) |
+| outcome and exit | positive 2, negative 0, inconclusive 4; name blocked everywhere 2 with that reason |
+| model | F10, F3 |
+| test | SM (positive), SP (negative), SB (blocked everywhere), SD and SR (inconclusive); test_volume.cpp |
+| limits | the lab emulates a box that drops one name; a real F10 rule has not been measured with this code yet. One path, one moment |
+
 ### sni-path (`dpi`, existing)
 
 Now reports the shared outcomes: positive for an SNI-specific reset or
@@ -175,6 +190,20 @@ under the hex dump called any QUIC-shaped datagram "QUIC Initial packet"
 even when the ids were someone else's, and that the version-negotiation
 probe went to the first port that sent any bytes; both now require the
 same validation as the note.
+
+### ct-names (`names <domain> --ct`)
+
+Every host name under a domain that certificate transparency logs publish,
+from crt.sh or a saved crt.sh JSON (`--ct-file`), run through the hostname
+markers. Facts, not guesses: the names are public and anyone can list them.
+The markers stay heuristics with no score. `--resolve` (DNS from this
+machine, at most 64 names) shows which names share an address and marks
+the node given with `--node`; behind a CDN that grouping means nothing and
+the output says so. Mail addresses from S/MIME certificates, IP literals
+and names under other domains are dropped. A failed lookup exits 4 and is
+never read as "no names". Tests: test_ct_names.cpp and the `--ct-file`
+cases in test_names_cli.py, including look-alikes (`subway.`,
+`notexample.com`, `example.com.evil.net`).
 
 ### snitch RTT
 

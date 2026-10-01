@@ -11,8 +11,8 @@ import sys
 HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "audit")
 
 
-def audit(exe, path):
-    r = subprocess.run([exe, "audit-config", path, "--json", "--no-color"], capture_output=True,
+def audit(exe, paths):
+    r = subprocess.run([exe, "audit-config", *paths, "--json", "--no-color"], capture_output=True,
                        text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=60)
     return json.loads(r.stdout)
 
@@ -26,8 +26,10 @@ def main():
         if not line:
             continue
         name, *rules = line.split()
-        seen.add(name)
-        rep = audit(exe, os.path.join(HERE, name))
+        # "server.json+client.json" runs the pair check
+        parts = name.split("+")
+        seen.update(parts)
+        rep = audit(exe, [os.path.join(HERE, p) for p in parts])
         if not rep.get("ok"):
             print("FAIL %s: %s" % (name, rep.get("error")))
             fails += 1

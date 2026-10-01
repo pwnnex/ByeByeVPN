@@ -5,6 +5,21 @@
 
 using std::string;
 
+string ct_names_fetch(const string& domain, string& err) {
+    // %25 is the crt.sh wildcard; deduplicate drops precertificate twins
+    const string url = "https://crt.sh/?q=%25." + domain + "&output=json&deduplicate=Y";
+    auto h = http_get(url, 20000);
+    // crt.sh often answers 502/503 under load; one retry
+    if (h.status >= 500) h = http_get(url, 20000);
+    if (!h.ok()) {
+        err = h.err.empty() ? "crt.sh answered HTTP " + std::to_string(h.status) : "crt.sh: " + h.err;
+        if (h.err.find("512 KiB") != string::npos)
+            err += "; too many certificates, query a subdomain or save the JSON and use --ct-file";
+        return {};
+    }
+    return h.body;
+}
+
 CtCheck ct_check(const string& cert_sha256) {
     CtCheck r;
     // need a full 64-char hex digest

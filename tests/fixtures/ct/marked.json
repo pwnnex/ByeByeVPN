@@ -1,0 +1,6 @@
+[
+  {"id": 101, "common_name": "example.com", "name_value": "example.com\nwww.example.com", "not_before": "2025-01-10T00:00:00"},
+  {"id": 102, "common_name": "panel.example.com", "name_value": "panel.example.com\nsub.example.com", "not_before": "2025-03-01T00:00:00"},
+  {"id": 103, "common_name": "*.example.com", "name_value": "*.example.com", "not_before": "2024-11-05T00:00:00"},
+  {"id": 104, "common_name": "remnawave.example.com", "name_value": "remnawave.example.com\nadmin@example.com\nexample.com.evil.net\nSUBWAY.example.com.", "not_before": "2024-12-01T00:00:00"}
+]

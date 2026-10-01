@@ -158,6 +158,15 @@ DpiProbe dpi_probe(const string& ip, int port, const string& sni, int to_ms) {
     return r;
 }
 
+ChEnd dpi_clienthello(const string& ip, int port, const string& sni, int to_ms) {
+    const ChResult r = send_ch(ip, port, sni, false, to_ms);
+    if (!r.connected) return ChEnd::NoTcp;
+    if (r.progressed) return ChEnd::Reply;
+    if (r.reset) return ChEnd::Reset;
+    if (r.silent) return ChEnd::Silent;
+    return ChEnd::Other;
+}
+
 int dpi_exit_code(const DpiProbe& d) {
     if (d.tunneled) return 64;
     if (d.sni_blocked || d.sni_dropped) return 2;

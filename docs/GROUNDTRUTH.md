@@ -111,6 +111,27 @@ Matrix row `volume-freeze` counts these; a run whose outcome differs from
 the expected one fails the gate like a stand outside its labels. The lab
 emulates the node's side of a freeze; it cannot emulate the operator.
 
+Client-side name and address runs (`dpi <node> 443 --sni brand.lab.test
+--real <ip> --json`). A box that drops one name is emulated by a server
+that reads the ClientHello SNI without consuming it and holds the
+connection silently for that name:
+
+| server | address | behaviour |
+|---|---|---|
+| N | 127.0.1.24 | the node: drops `brand.lab.test` silently, answers every other name |
+| R | 127.0.1.25 | the real site: answers `brand.lab.test` |
+| RB | 127.0.1.26 | a real site that drops `brand.lab.test` too |
+
+| run | node | real address | expected |
+|---|---|---|---|
+| SM | N | R | positive |
+| SP | A (answers every name) | R | negative |
+| SB | N | RB | inconclusive, name blocked (exit 2) |
+| SD | H1 (nothing listens) | R | inconclusive |
+| SR | N | H1 | inconclusive |
+
+Matrix row `sni-address` counts these the same way.
+
 ## Where the lab disagrees with first expectations
 
 The first plan expected a detection on C, E and F, a tier A hit on E and
@@ -160,4 +181,5 @@ the report now prints on every scan.
 | ack-all-warning | ack-all or flat-RTT warning, true on I and on H2 when the machine's path is ack-all |
 | quic-endpoint | JSON note `quic-endpoint` or a printed QUIC classification line, true on Q only |
 | volume-freeze | `dpi --volume` outcome positive, true on VZ only; inconclusive and not applicable count as INC |
+| sni-address | `dpi --sni --real` outcome positive, true on SM only; inconclusive counts as INC |
 | silent-on-junk-claim | informational, counts the old "silent-on-junk" verdict line |

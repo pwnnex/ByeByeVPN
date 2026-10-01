@@ -43,20 +43,34 @@ static string read_whole_file(const string& path, bool& ok) {
     return out;
 }
 
-int run_config_audit(const string& path) {
+static int show_audit(const ConfigAudit& a, const string& path);
+
+static bool read_config(const string& path, string& text) {
     bool ok = false;
-    string text = read_whole_file(path, ok);
-    if (!ok) {
-        if (g_json) {
-            ConfigAudit error;
-            error.err = "cannot read config file (missing, read error or over 16 MiB)";
-            std::fputs(config_audit_to_json(error).c_str(), stdout);
-        } else
-            printf("%scannot read config file '%s' (limit 16 MiB)%s\n",
-                   col(C::RED), path.c_str(), col(C::RST));
-        return 64;
-    }
-    ConfigAudit a = audit_config_text(text);
+    text = read_whole_file(path, ok);
+    if (ok) return true;
+    if (g_json) {
+        ConfigAudit error;
+        error.err = "cannot read config file (missing, read error or over 16 MiB)";
+        std::fputs(config_audit_to_json(error).c_str(), stdout);
+    } else
+        printf("%scannot read config file '%s' (limit 16 MiB)%s\n", col(C::RED), path.c_str(), col(C::RST));
+    return false;
+}
+
+int run_config_audit(const string& path) {
+    string text;
+    if (!read_config(path, text)) return 64;
+    return show_audit(audit_config_text(text), path);
+}
+
+int run_config_pair(const string& server_path, const string& client_path) {
+    string server, client;
+    if (!read_config(server_path, server) || !read_config(client_path, client)) return 64;
+    return show_audit(audit_config_pair(server, client), server_path + " + " + client_path);
+}
+
+static int show_audit(const ConfigAudit& a, const string& path) {
     if (g_json) {
         // machine-readable: emit the json object and exit with the tier code.
         std::fputs(config_audit_to_json(a).c_str(), stdout);
@@ -141,6 +155,10 @@ void help() {
     printf("  byebyevpn dpi <host> [port]    SNI path probe: does YOUR ISP/TSPU reset or silently drop this SNI\n");
     printf("                                 exit 0 reply, 2 SNI-specific reset/drop, 4 inconclusive,\n");
     printf("                                 5 preflight failed, 64 fake-IP tunnel; --json\n");
+    printf("  byebyevpn dpi <node> [port] --sni NAME --real IP|auto\n");
+    printf("                                 the same name to your node and to the address it really lives on:\n");
+    printf("                                 fails to the node and passes to its own address = a name+address\n");
+    printf("                                 rule on this path. exit 0 passes, 2 fails, 4 inconclusive\n");
     printf("  byebyevpn dpi <host> [port] --volume /path --control host[:port]/path\n");
     printf("                                 volume check from THIS client: does the path stop carrying\n");
     printf("                                 bytes on an open connection (16-20 KB freeze)? /path must\n");
@@ -151,6 +169,10 @@ void help() {
     printf("  byebyevpn names <host...>      offline hostname markers; supports --json\n");
     printf("                                 protocol/panel names and provider conventions; no score impact\n");
     printf("                                 exit 3 strong, 2 moderate, 0 weak/none/IP, 64 invalid input\n");
+    printf("  byebyevpn names <domain> --ct  every name under the domain in public CT logs (crt.sh),\n");
+    printf("                                 with markers; --ct-file F reads a saved crt.sh JSON instead;\n");
+    printf("                                 --resolve shows names sharing an address, --node IP marks yours;\n");
+    printf("                                 exit 4 when the CT lookup failed\n");
     printf("  byebyevpn geoip <ip>           GeoIP only\n");
     printf("  byebyevpn snitch <ip> [port]   SNITCH RTT/GeoIP consistency (methodika §10.1)\n");
     printf("  byebyevpn trace <ip>           Traceroute hop-count analysis\n");
@@ -158,6 +180,9 @@ void help() {
     printf("  byebyevpn awg-entropy <pcap>   offline AmneziaWG-compatible traffic heuristic (PCAP/PCAPNG)\n");
     printf("                                 entropy + repeated UDP trains; supports --json; no version proof\n");
     printf("  byebyevpn audit-config <file>  identify configured Xray protocols/flows and audit settings\n");
+    printf("  byebyevpn audit-config <server> <client>\n");
+    printf("                                 check a client config against its server: port, transport,\n");
+    printf("                                 security, path, user, flow, REALITY name/shortId/key pair\n");
     printf("                                 static, no network; --json; exit 65 for compatibility errors\n");
     printf("  byebyevpn sweep <cidr>         light-probe a subnet (e.g. 1.2.3.0/24) and cluster\n");
     printf("                                 hosts by TLS fingerprint (JA4S + cert)\n\n");

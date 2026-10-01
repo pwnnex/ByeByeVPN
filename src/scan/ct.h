@@ -13,4 +13,7 @@ struct CtCheck {
 };
 
 CtCheck ct_check(const std::string& cert_sha256);
+
+// raw crt.sh json for every certificate naming *.domain; empty and err set on failure
+std::string ct_names_fetch(const std::string& domain, std::string& err);
 CtCheck parse_ct_response(const std::string& body);

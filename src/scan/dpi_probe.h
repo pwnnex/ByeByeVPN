@@ -16,6 +16,7 @@
 #pragma once
 
 #include "../common/outcome.h"
+#include "sni_mismatch.h"
 
 #include <string>
 
@@ -45,6 +46,9 @@ DpiProbe dpi_probe(const std::string& ip, int port, const std::string& sni, int 
 
 // 0 reply, 2 sni-specific failure, 4 inconclusive, 64 tunneled
 int dpi_exit_code(const DpiProbe& d);
+
+// one chromelike clienthello carrying sni, and how the first reply ended
+ChEnd dpi_clienthello(const std::string& ip, int port, const std::string& sni, int to_ms = 2500);
 
 // the shared four outcomes; positive = an sni-specific failure on this path
 inline Outcome dpi_outcome(const DpiProbe& d) {

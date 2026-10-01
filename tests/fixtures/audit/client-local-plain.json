@@ -1,0 +1,24 @@
+{
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "127.0.0.1",
+            "port": 10085,
+            "users": [
+              {
+                "id": "5f2e1a44-7d1c-4c6a-9b36-2a8c1e0f9d11"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "none"
+      }
+    }
+  ]
+}

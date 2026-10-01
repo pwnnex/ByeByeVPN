@@ -109,6 +109,15 @@ DISABLED = set()
 # "ip:port/proto error" for every listener the host refused
 BIND_FAILED = []
 
+# dpi --sni --real: a node behind a box that drops one name, the real site
+# that serves it, and a real site that drops it too. not scanned.
+SNI_NAME = "brand.lab.test"
+SNI_SERVERS = {
+    "N":  dict(ip="127.0.1.24", gate=True,  what="node: drops %s silently, answers every other name" % SNI_NAME),
+    "R":  dict(ip="127.0.1.25", gate=False, what="the real site: answers %s" % SNI_NAME),
+    "RB": dict(ip="127.0.1.26", gate=True,  what="a real site that drops %s too" % SNI_NAME),
+}
+
 # tls servers for the client-side volume check (dpi --volume), not scanned.
 # body sizes are app bytes; the client counts socket bytes, handshake included
 VOLUME_SERVERS = {
@@ -317,6 +326,46 @@ def volume_handler_factory(ctx, mode):
             t.unwrap()
         except (ssl.SSLError, OSError):
             pass
+    return handler
+
+
+def peek_sni(conn):
+    # rfc 8446 4.1.2 clienthello, read without consuming it
+    conn.settimeout(5)
+    try:
+        d = conn.recv(4096, socket.MSG_PEEK)
+    except OSError:
+        return None
+    try:
+        if len(d) < 44 or d[0] != 0x16 or d[5] != 0x01:
+            return None
+        p = 43
+        p += 1 + d[p]
+        p += 2 + int.from_bytes(d[p:p + 2], "big")
+        p += 1 + d[p]
+        end = p + 2 + int.from_bytes(d[p:p + 2], "big")
+        p += 2
+        while p + 4 <= end:
+            t, n = int.from_bytes(d[p:p + 2], "big"), int.from_bytes(d[p + 2:p + 4], "big")
+            p += 4
+            if t == 0:
+                size = int.from_bytes(d[p + 3:p + 5], "big")
+                return d[p + 5:p + 5 + size].decode("ascii", "replace")
+            p += n
+    except (IndexError, ValueError):
+        return None
+    return None
+
+
+def sni_gate_factory(ctx, blocked):
+    # a path box that drops one name silently, the way tspu does
+    web = tls_handler_factory(ctx)
+
+    def handler(conn):
+        if peek_sni(conn) == blocked:
+            silent_handler(conn)
+            return
+        web(conn)
     return handler
 
 
@@ -570,8 +619,10 @@ def start_all(with_xray=True):
         st.listen_tcp(STANDS["X"]["ip"], 443, sstp)
         for v in VOLUME_SERVERS.values():
             st.listen_tcp(v["ip"], 443, volume_handler_factory(ctx, v["mode"]))
+        for v in SNI_SERVERS.values():
+            st.listen_tcp(v["ip"], 443, sni_gate_factory(ctx, SNI_NAME) if v["gate"] else web)
     else:
-        DISABLED.add("VOLUME")
+        DISABLED.update(("VOLUME", "SNI"))
     st.listen_tcp(a, HTTP_PORT, plain_http_handler)
     st.listen_tcp(STANDS["S"]["ip"], HTTP_PORT, plain_http_handler)
 
@@ -614,6 +665,8 @@ def start_all(with_xray=True):
         DISABLED.update(n for n, s in STANDS.items() if s["ip"] in bad)
         if any(v["ip"] in bad for v in VOLUME_SERVERS.values()):
             DISABLED.add("VOLUME")
+        if any(v["ip"] in bad for v in SNI_SERVERS.values()):
+            DISABLED.add("SNI")
         notes["bind failed"] = "; ".join(BIND_FAILED)
     return st, procs, notes
 

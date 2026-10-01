@@ -150,6 +150,60 @@ string trace_json(const char* role, const VolumeTrace& t) {
            ", \"outcome\": " + jstr(outcome_name(volume_transfer_outcome(t))) + " }";
 }
 
+// dpi --real: the node's name to the node and to its own address, rounds until two agree
+int run_sni_real_check(const string& host, const string& node_ip, int port) {
+    const string sni = g_dpi_sni.empty() ? host : g_dpi_sni;
+    if (sni.empty() || is_ip_literal(sni)) {
+        printf("  --real needs a name: give --sni with the name your node serves (Reality serverName)\n");
+        return 64;
+    }
+    const string real_ip = g_dpi_real == "auto" ? target_ip(sni) : g_dpi_real;
+    if (real_ip.empty() || !is_ip_literal(real_ip)) {
+        printf("  --real wants an IP address or 'auto' (resolve %s)\n", sni.c_str());
+        return 64;
+    }
+    if (real_ip == node_ip) {
+        printf("  the real address and the node are the same (%s); nothing to compare\n", real_ip.c_str());
+        return 64;
+    }
+    if (!preflight_ok(real_ip)) return 5;
+    printf("  sni %s  node %s:%d  real address %s:%d\n", sni.c_str(), node_ip.c_str(), port, real_ip.c_str(), port);
+    printf("  %s\n", PATH_SCOPE);
+    std::vector<SniRound> rounds;
+    std::vector<Outcome> obs;
+    while (!observations_settled(obs)) {
+        if (!obs.empty()) Sleep(700);
+        SniRound r;
+        r.node_benign = dpi_clienthello(node_ip, port, "www.example.com");
+        r.node_target = dpi_clienthello(node_ip, port, sni);
+        r.real_target = dpi_clienthello(real_ip, port, sni);
+        rounds.push_back(r);
+        const SniRoundVerdict rv = sni_round_verdict(r);
+        obs.push_back(rv == SniRoundVerdict::Mismatch ? Outcome::Positive
+                    : rv == SniRoundVerdict::Passes   ? Outcome::Negative : Outcome::Inconclusive);
+        printf("  round %zu: node+sni %-8s  node+benign %-8s  real+sni %s\n", rounds.size(),
+               ch_end_name(r.node_target), ch_end_name(r.node_benign), ch_end_name(r.real_target));
+    }
+    const SniMismatchVerdict v = sni_mismatch_verdict(rounds);
+    printf("  => sni and address: %s. %s\n", outcome_name(v.outcome), v.reason.c_str());
+    if (g_json) {
+        string o = "{\n  \"check\": \"sni-address\",\n  \"sni\": " + jstr(sni) + ",\n  \"node\": " + jstr(node_ip) +
+                   ",\n  \"real\": " + jstr(real_ip) + ",\n  \"port\": " + std::to_string(port) +
+                   ",\n  \"outcome\": " + jstr(outcome_name(v.outcome)) +
+                   ",\n  \"name_blocked\": " + (v.name_blocked ? "true" : "false") +
+                   ",\n  \"reason\": " + jstr(v.reason) + ",\n  \"rounds\": [\n";
+        for (size_t i = 0; i < rounds.size(); ++i)
+            o += string("    { \"node_target\": ") + jstr(ch_end_name(rounds[i].node_target)) +
+                 ", \"node_benign\": " + jstr(ch_end_name(rounds[i].node_benign)) +
+                 ", \"real_target\": " + jstr(ch_end_name(rounds[i].real_target)) + " }" +
+                 (i + 1 < rounds.size() ? ",\n" : "\n");
+        o += "  ],\n  \"scope\": " + jstr(PATH_SCOPE) + "\n}\n";
+        std::fputs(o.c_str(), stdout);
+    }
+    // 2 whenever the node's name fails on this path, the text says why
+    return v.outcome == Outcome::Positive || v.name_blocked ? 2 : v.outcome == Outcome::Negative ? 0 : 4;
+}
+
 // dpi --volume: control, targets until two agree, control again
 int run_volume_check(const string& host, const string& ip, int port) {
     string chost, cpath;
@@ -386,6 +440,7 @@ int run_command(const vector<string>& pos) {
             // a tunnel on the path measures the tunnel, not the isp
             if (!preflight_ok(ip)) { rc = 5; goto done; }
             if (!g_volume_path.empty()) { rc = run_volume_check(pos[1], ip, port); goto done; }
+            if (!g_dpi_real.empty()) { rc = run_sni_real_check(pos[1], ip, port); goto done; }
             DpiProbe d = dpi_probe(ip, port, pos[1]);
             printf("  target=%s  sni=%s\n", ip.c_str(), pos[1].c_str());
             if (d.tunneled) {
@@ -438,7 +493,7 @@ int run_command(const vector<string>& pos) {
             rc = run_hostname_analysis(vector<string>(pos.begin() + 1, pos.end()));
         } else if (cmd == "audit-config" || cmd == "audit") {
             if (pos.size() < 2) { printf("need a config file path\n"); rc = 64; goto done; }
-            rc = run_config_audit(pos[1]);
+            rc = pos.size() >= 3 ? run_config_pair(pos[1], pos[2]) : run_config_audit(pos[1]);
         } else if (cmd == "sweep") {
             if (pos.size() < 2) { printf("need a CIDR (e.g. 1.2.3.0/24)\n"); rc = 64; goto done; }
             rc = run_sweep(pos[1]);

@@ -1,5 +1,275 @@
 # Changelog
 
+## v3.0.0 - 2026-10-01
+
+A major version: the verdict engine, the scored signal set, the exit codes
+4 and 5 and the JSON fields below changed since v2.8.3. Scripts that read
+the old labels keep working; scripts that expected a verdict on every run
+must now handle INCONCLUSIVE and UNRELIABLE.
+
+### new: a cleaner terminal
+
+The banner has a cyan to violet gradient and a version line. Every scan
+step opens with the same `▌ 3/8  title   detail` header, and the findings
+start with a one-line card that answers first (CLEAN, NOISY, SUSPICIOUS,
+OBVIOUSLY-VPN, INCONCLUSIVE or UNRELIABLE, with the score or the reason).
+`--no-color` and saved reports get the same layout without colour codes.
+
+### new: `dpi --volume`, the 16-20 KB freeze from the owner's client
+
+`dpi <host> [port] --volume /path --control host[:port]/path` downloads a
+resource of 64 KB or more from the node over TLS and the control path from
+another host, control before and after, and records where bytes stop on an
+open connection. Positive (exit 2) needs two transfers stalled for 8 s at
+the same offset while both controls carried 64 KB; negative (exit 0) when
+the node carried the window every time; inconclusive or not applicable
+(exit 4) otherwise, with the reason. The offset counts socket bytes,
+TLS handshake included, and the text says whether it lies in the 16-20 KB
+band field reports describe. The request uses the HTTPS probe's header set.
+
+`dpi` itself now prints the shared outcome (`SNI check: positive /
+negative / inconclusive / not applicable`) and takes `--json`; exit codes
+are unchanged. Every client-side result states that it measures this
+machine's path to this host at this moment.
+
+Lab runs VZ (emulated freeze, positive), VV and VY (negative, Y pauses 3 s
+inside the band), VT (FIN after 14000 B), VC (failing control), VN (no
+control), VA (page too small). COVERAGE row 21 moves from gap to client
+side; row 20 gets the four outcomes.
+
+### new: config audit checks, a hygiene block, sing-box parity
+
+`audit-config` gains, for Xray and sing-box: `duplicate-listener` (one port
+and socket layer twice on overlapping addresses; TCP and UDP may share a
+number), `tls-version-range` (min above max) and `api-public` (Xray API or
+sing-box Clash/V2Ray API off loopback). Xray only: `duplicate-tag` and
+`duplicate-email`, both of which stop the core. sing-box gets
+`reality-shortid-invalid` and `reality-target-missing`, which Xray had.
+
+New category `hygiene`, printed in its own block and kept out of the tier:
+`settings-ignored` (settings for another transport or security mode),
+`duplicate-user`, `debug-log`, and `reality-show` moved there.
+
+Fixed: sing-box REALITY under `tls.enabled: false` was audited as REALITY;
+sing-box ignores that block, the listener is plaintext. The brand rule no
+longer fires there and `plaintext-proto` does.
+
+34 fixtures in `tests/fixtures/audit/` with `expect.txt`, one where each rule
+fires and one look-alike where it must not, run by
+`tests/test_audit_fixtures.py` in CI.
+
+### new: WireGuard self-check with the owner's keys
+
+`scan` and `udp` take `--wg-pubkey <key|file>`, `--wg-key <file>`,
+`--wg-psk <file>` and `--wg-port N`. With the server public key and the
+private key of a peer configured on that server the scanner sends a full
+WireGuard initiation (Noise IKpsk2, whitepaper 5.4.2) and verifies the
+reply: a response whose mac1 checks out can only come from the holder of
+the server private key. Two agreeing answers give the new scored signal
+`wg-keyed` (tier A, -15), which shares one score with `wg-family`.
+Silence is inconclusive. Keys are read from files at use time, wiped after,
+never printed and never in JSON (`wg_self_check` has `requested`, `ran`,
+`port`).
+
+The server public key alone is not enough: after
+mac1 the responder decrypts the initiator's static key and drops a peer it
+does not know. Initiations are spaced 1 to 1.5 s apart: back to back,
+wireguard-go dropped the second one (20 ms flood window, timestamps in
+2^24 ns steps). The server moves that peer's endpoint to the scanning
+machine until its own client sends again, so use a spare peer.
+
+Lab runs FK (real xray wireguard-go, positive), FS (preshared key the
+server lacks, positive with that note), FW (unknown peer, inconclusive),
+WK (synthetic responder copying our index, negative) and KK (unrelated
+type 2, negative). Unit tests check BLAKE2s (RFC 7693), X25519 (RFC 7748)
+and the Noise initial chaining key and hash, and run the initiator against
+a responder built from the whitepaper. COVERAGE row 7 moves from gap to
+wire for the owner.
+
+### ci: the ground-truth lab gates every build
+
+New `groundtruth` job in `release.yml`: after the Windows build it runs
+`tools/groundtruth/run.py --require-all` on the exe that job produced, with
+xray v26.7.28 pinned by sha256, and uploads the matrix. `run.py` now fails
+on a false positive in any matrix row that has a truth (printed claims
+included, not only the three scored ids and the verdict), skips and lists
+stands whose server did not start, and `--rescore` returns the same exit
+code as a fresh run. Under Actions every failure reason is printed as an
+annotation. Plain HTTP on the stands moved from 80 to 8000 and port 22 left
+the scan set: Windows runners hold both with system services.
+
+### fix: QUIC-shaped replies printed as QUIC
+
+The line under the UDP hex dump said "QUIC Initial packet" or "QUIC
+Version-Negotiation" for any long-header datagram, including ones
+addressed to connection ids the probe never chose; the JSON already called
+the same reply `udp-unmatched`. The line now requires the same validation
+as the `quic-endpoint` note, and the version-negotiation follow-up goes
+only to a port with a validated reply. Found by the new lab stand U.
+
+### lab: QUIC stands
+
+Stand Q runs xray Hysteria2 (quic-go) on UDP 443, stand U answers with
+QUIC-shaped traps. New matrix row `quic-endpoint`; COVERAGE row 11 moves
+from unit to wire. 17 stands, 0 FP (`docs/CALIBRATION.md`, run `quic-0930`).
+
+### docs
+
+- zh-CN and fa README: a dated banner says the body was written for
+  v2.5.7, only the 2026-09 block is current, and English wins on any
+  difference.
+- `release.yml`: the last long dash is gone.
+
+### new: interactive panel
+
+`byebyevpn` without arguments opens a full-screen panel instead of the
+numbered menu: sections on the left, on the right what the item does and
+what it sends, current settings and the last verdict; a status bar shows,
+without sending anything, whether public traffic leaves through a tunnel
+and which proxy clients or packet rewriters run. Arrow keys, Enter, `S`
+settings (port range, timeout, threads, stealth, passive, lookups, junk
+probes, saving, preflight override), `L` last scan, `Q` quit. A run leaves
+the panel so the output scrolls, then prints a result card. Without a
+console the program reads command lines such as `scan 1.2.3.4`.
+
+Command dispatch moved from `main.cpp` to `src/app/commands.cpp`
+(`run_command`), so the panel and the command line run the same code.
+
+- `ports`, `udp`, `tls`, `j3`, `grpc`, `snitch` and `trace` run the
+  preflight too and exit 5 without sending anything when it fails.
+- the `j3` command printed `SILENT (dropped)`; it now prints how each probe
+  ended.
+
+### fix: false positives, measured against a ground-truth lab
+
+New `tools/groundtruth/` starts 15 loopback stands with known answers
+(plain origin, Reality, Shadowsocks, WireGuard, SOCKS5, closed, ack-all,
+lossy, UDP traps, synthetic signatures) and prints a TP/FP/TN/FN matrix per
+signal. Before and after are in `docs/CALIBRATION.md`. False-positive
+cells in the matrix went from 18 to 0.
+
+- a 92-byte UDP reply starting `02 00 00 00` scored WireGuard and
+  `IMMEDIATE BLOCK` even when unrelated to the probe. a response must now
+  carry our sender index as its receiver index.
+- a closed port printed "drop" on every host: Windows retries SYN after
+  RST for ~2 s and `--tcp-to 800` gave up first. connects now set
+  `SIO_TCP_INITIAL_RTO` without SYN retransmission (2030 ms became 1 ms),
+  and a timeout prints as "no answer", not as a drop policy.
+- the OS guess named Windows on 0 of 9 Windows stands; removed.
+- J3 printed FIN, RST, a held connection and a failed connect alike as
+  `SILENT (dropped)`, and called a plain TLS site "silent-on-junk
+  (TLS-only / Reality-hidden)". each probe now shows its real end, the
+  counts are read only after a well-formed exchange on the same port, and
+  no product is named.
+- port hints named Reality or XTLS on 443, 4433, 4443, 8443, and "possible
+  VPN" on 6443 (the Kubernetes API); now IANA or documented defaults only.
+- `ech` printed "no HTTPS RR" when the DoH lookup failed; it now says the
+  record is unknown and exits 4.
+- `snitch` stated causes ("GeoIP lies", "tunnel queue overhead") and
+  compared against a band even without a country; now observations only.
+- the SSTP probe sent the IP literal as SNI and an all-zero correlation id;
+  all TLS clients now omit SNI for IP targets (RFC 6066) and SSTP uses a
+  random GUID.
+- the JA4S seeds were sorted hashes and never matched wire order.
+  re-observed with `tools/groundtruth/sh_order.py`: Cloudflare sends
+  key_share first (`234ea6891581`), the TLS 1.2 OpenSSL set is
+  `17136cd5846b`.
+- the 12-port QUIC cap iterated a sorted set, so 36712 fell behind open
+  ports and was never probed; presets go first, cut ports are listed.
+- `local` matched "TUN" as a substring (Teredo counted as a VPN) and saw
+  a full tunnel only on 0.0.0.0/0; it now uses IfType plus whole tokens,
+  the 0/1 + 128/1 pair and the route Windows picks for a public address.
+
+### change: verdict engine
+
+- every check ends as positive, negative, inconclusive or not applicable;
+  inconclusive never becomes negative and never moves the score.
+- a positive needs two agreeing observations out of at most three.
+- only `wg-family` (-15), `sstp` (-18) and `socks5` (-20) move the score,
+  each with a passport in `docs/SIGNALS.md`. `wireguard` and `amnezia` were
+  one piece of evidence under two ids and are merged.
+- GeoIP VPN, proxy and Tor tags no longer score (were -18, -12, -25).
+- no verdict when more than half of the applicable checks are
+  inconclusive, when 2 of 3 random control ports accept (ack-all path),
+  or when the path check loses half its connects. the report lists why.
+- every report lists what the probes cannot see; CLEAN now says it means
+  "no named signature answered".
+- JSON gains `checks`, `signals.scored`, `signals.inconclusive`,
+  `failed_reasons`, `coverage`, `preflight`, `channel`, `ack_all`,
+  `unreliable`, `preflight_overridden`. old keys stay.
+
+### new: preflight
+
+Before any probe: tunnel adapter on the route to the target, a TCP connect
+to `192.0.2.1` succeeding (local ack-all stack), zapret/GoodbyeDPI/clumsy
+running, fake-IP target, `--expect-ip` mismatch. Any of these stops the
+scan with `UNRELIABLE` (exit 5) before a single probe goes out;
+`--i-know-what-i-am-doing` scans anyway and marks the verdict overridden.
+Tunnels off the target route, proxy clients, system proxy and proxy
+variables are warnings. `dpi` runs the same check.
+
+### docs
+
+`docs/TSPU-MODEL.md`, `docs/SIGNALS.md`, `docs/GROUNDTRUTH.md`,
+`docs/CALIBRATION.md`; `docs/COVERAGE.md` rewritten (it was cut off).
+
+### fix: wire bytes that contradicted the docs
+
+- J3 "TLS CH invalid-SNI": the hand-typed hello declared 65 extension bytes
+  and carried 76, so the record, handshake and extension lengths all
+  disagreed and every TLS server answered `decode_error`. the probe measured
+  "does this port speak TLS", not "how does it handle an unknown name". it is
+  now built by `build_minimal_clienthello()` with computed lengths: 128 bytes
+  on the wire for an 11-char name, checked on loopback and by a unit test.
+- ICMP traceroute sent 33 bytes of payload, the C string terminator
+  included. now the 32-byte `ping.exe` payload, guarded by `static_assert`.
+- `http_get()` sent `Accept-Encoding: gzip, deflate` (from
+  `WINHTTP_OPTION_DECOMPRESSION`) and `Connection: Keep-Alive`, while README
+  and SECURITY said GET + Host only. decompression is gone; the capture now
+  shows `GET`, `Connection: Keep-Alive` (WinHTTP default) and `Host`. an
+  encoded reply is rejected. README (all four languages) and SECURITY now
+  list the captured bytes.
+
+### fix: `dpi` reported a silent drop as a pass
+
+a target SNI that got no reply and no reset, next to a benign SNI that got a
+TLS reply, fell through to "got a TLS reply" with exit 0. TSPU runs with
+`send_RST off` (tspu-docs 10.1.5) and field reports show silent drops after
+the ClientHello, so this was the common case. each connection is now
+classified as reply / reset / silent / no TCP. exit codes: 0 reply,
+2 SNI-specific reset or drop, 4 inconclusive, 64 fake-IP tunnel.
+
+### fix: JA4, JA4S and JA4H follow the FoxIO spec
+
+- JA4 and JA4S ALPN use the first and last character of the first value
+  (`http/1.1` is `h1`, was `ht`), with the hex fallback for non-alphanumeric
+  bytes. JA4_b is `000000000000` when there are no ciphers.
+- JA4S hashes the ServerHello extensions in wire order; they were sorted.
+- JA4H uses four characters of the first Accept-Language tag, `-` removed,
+  `0`-padded (`en-US` is `enus`, absent is `0000`); it used two.
+- unit test against the FoxIO example `t13d1516h2_8daaf6152771_e5627efa2ab1`.
+
+JA4S values printed by earlier builds are not comparable with other JA4S
+databases. the two seed ext-hashes in `ja4s_db.cpp` were computed with the
+sorted list and still need re-observation in wire order.
+
+### fix: a tier A match could still print CLEAN
+
+one WireGuard-shaped reply gave `CLEAN 85` and exit 0 next to
+`IMMEDIATE BLOCK`. any tier A match now caps the score at 69.
+
+### docs: the synthetic ClientHello is not Chrome 131
+
+`build_chrome131_clienthello` is renamed `build_chromelike_clienthello`.
+README, SECURITY and the header comment now say what it is: the pre-ML-KEM
+Chrome extension set with a fixed order, no X25519MLKEM768 and no ECH GREASE.
+its JA4 equals the FoxIO example. it is not what a current Chrome sends.
+
+- README: the QUIC ClientHello does carry `quic_transport_parameters` (0x39);
+  the Limitations section said it did not.
+- `--help`: pre-scan hygiene note (turn off VPN, Zapret, GoodbyeDPI, proxy)
+  and `dpi` exit codes.
+
 ## v2.8.3 - 2026-06-22
 
 ### new: `ech` — DNS HTTPS-RR / ECH probe
@@ -75,7 +345,7 @@ so and tells you to disable the VPN for a real test.
 
 ### fix: code-audit findings (memory safety + resource leaks)
 
-a multi-agent code audit (adversarially verified) surfaced and fixed:
+a code audit surfaced and fixed:
 
 - **QUIC length underflow** (`quic.cpp`): `quic_unprotect_client_initial`
   computed `ct_len = length_val - pn_len` on an unchecked wire varint; a
@@ -1639,7 +1909,7 @@ v2.3 rebalances:
 
 The calibration pass above made v2.3 gentler on corporate web hosts,
 but it also made it too gentle on real Xray installs. A real-world
-Reality-static setup on `185.92.181.205` (US / CGI-GLOBAL hosting,
+Reality-static setup on `198.51.100.205` (US / CGI-GLOBAL hosting,
 `CN=www.amazon.com` on a random VPS, :2096 returning `HTTP/0.0 307`
 with identical byte-exact canned replies) would otherwise have scored
 **93/100 CLEAN** — exactly the kind of DPI-evadable setup the tool

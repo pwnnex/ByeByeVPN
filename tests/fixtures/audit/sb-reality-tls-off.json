@@ -1,0 +1,29 @@
+{
+  "inbounds": [
+    {
+      "type": "vless",
+      "listen": "::",
+      "listen_port": 443,
+      "users": [
+        {
+          "uuid": "5f2e1a44-7d1c-4c6a-9b36-2a8c1e0f9d11",
+          "flow": "xtls-rprx-vision"
+        }
+      ],
+      "tls": {
+        "enabled": false,
+        "reality": {
+          "enabled": true,
+          "handshake": {
+            "server": "www.microsoft.com",
+            "server_port": 443
+          },
+          "private_key": "x",
+          "short_id": [
+            "0123abcd"
+          ]
+        }
+      }
+    }
+  ]
+}

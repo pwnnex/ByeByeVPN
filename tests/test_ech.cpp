@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// unit tests for src/scan/ech.cpp (the pure HTTPS-RR presentation parser).
+// unit tests for src/scan/ech.cpp (the pure https-rr presentation parser).
 #include "doctest.h"
 #include "../src/scan/ech.h"
 
@@ -55,7 +55,7 @@ TEST_CASE("ech_parse: exact base64 decoded length (padded + unpadded)") {
 }
 
 TEST_CASE("ech_parse: generic RFC 3597 wire form (alpn + hints + ech)") {
-    // SvcPriority=1, root target, then alpn(h3,h2) / ipv4hint / ech / ipv6hint.
+    // svcpriority=1, root target, then alpn(h3,h2) / ipv4hint / ech / ipv6hint.
     // whitespace inside the hex is tolerated; the leading rdlen is ignored.
     std::string rr =
         "\\# 49 0001 00 "

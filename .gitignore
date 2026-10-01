@@ -1,11 +1,18 @@
-# Build artifacts
+# build artifacts
 build/
 cmake-build-*/
 out/
 
 # throwaway capture/dev harnesses (not part of the build)
-tools/
+tools/*
+!tools/update_public_suffix.py
+!tools/groundtruth/
+tools/groundtruth/.run/
+tools/groundtruth/__pycache__/
+tools/groundtruth/*.err
+tools/groundtruth/bin/
 *.o
+*.d
 *.obj
 *.a
 *.lib
@@ -19,7 +26,7 @@ tools/
 !build-win/libssl.a
 !build-win/libcrypto.a
 
-# Binaries (let releases carry these, don't commit to repo)
+# binaries (let releases carry these, don't commit to repo)
 byebyevpn
 byebyevpn.exe
 byebyevpn-static
@@ -27,22 +34,25 @@ byebyevpn-tests
 byebyevpn-tests.exe
 byebyevpn-tests-asan
 byebyevpn-tests-asan.exe
+udp-probe-tests.exe
+web-probe-tests.exe
 fuzz_ja4
 fuzz_ja4.exe
 byebyevpn-sbom.json
+byebyevpn-*-SHA256SUMS.txt
 *.minisig
 dist/byebyevpn
 dist/byebyevpn.exe
 dist/*.dll
 
-# CMake
+# cmake
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 Makefile.cmake
 compile_commands.json
 
-# IDE
+# ide
 .vscode/
 .idea/
 *.swp
@@ -50,7 +60,7 @@ compile_commands.json
 .DS_Store
 Thumbs.db
 
-# OpenSSL vendor
+# openssl vendor
 *.pdb
 *.ilk
 *.exp

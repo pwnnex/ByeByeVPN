@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// DNS resolution. always prefers IPv4 to dodge happy-eyeballs into
-// silently-failing v6 paths on RU/CIS ISPs.
+// dns resolution. always prefers ipv4 to dodge happy-eyeballs into
+// silently-failing v6 paths on ru/cis isps.
 #pragma once
 
-#include "../common/winhdr.h"
 #include <string>
 #include <vector>
+struct sockaddr;
 
 struct Resolved {
     std::string host;

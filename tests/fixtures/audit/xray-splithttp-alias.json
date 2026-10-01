@@ -1,0 +1,31 @@
+{
+  "inbounds": [
+    {
+      "protocol": "vless",
+      "port": 443,
+      "settings": {
+        "decryption": "none",
+        "clients": [
+          {
+            "id": "5f2e1a44-7d1c-4c6a-9b36-2a8c1e0f9d11"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "splithttp",
+        "security": "tls",
+        "splithttpSettings": {
+          "path": "/x"
+        },
+        "tlsSettings": {
+          "certificates": [
+            {
+              "certificateFile": "/x",
+              "keyFile": "/y"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

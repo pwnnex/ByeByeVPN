@@ -20,7 +20,7 @@ TcpOpen probe_tcp(const string& host, int port, int to_ms) {
     if (s == INVALID_SOCKET) { o.err = err; return o; }
     o.connect_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                      std::chrono::steady_clock::now() - t0).count();
-    // passive banner grab — some servers talk first (SSH/FTP/SMTP)
+    // passive banner grab - some servers talk first (ssh/ftp/smtp)
     char buf[512]; int n = tcp_recv_to(s, buf, sizeof(buf) - 1, 600);
     if (n > 0) {
         buf[n] = 0;

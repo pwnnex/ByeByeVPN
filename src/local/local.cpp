@@ -5,6 +5,7 @@
 #include "../common/util.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <map>
 #include <set>
@@ -24,17 +25,33 @@ static string sockaddr_to_str(SOCKADDR* sa) {
     return buf;
 }
 
-// keywords that identify VPN-like adapters by description / friendly name.
-static bool adapter_is_vpn(const string& desc, const string& name) {
-    static const char* kw[] = {
-        "TAP-Windows", "TAP-ProtonVPN", "WireGuard", "WireGuard Tunnel",
-        "Wintun", "TUN", "Tun ", "OpenVPN", "Mullvad", "NordLynx", "ProtonVPN",
-        "Cloudflare WARP", "Hiddify", "Amnezia", "singbox", "sing-box",
-        "v2ray", "xray", "AmneziaWG", "ExpressVPN", "Private Internet",
-        "PIA", "Surfshark", "TorGuard"
-    };
-    for (auto k: kw) if (icontains(desc, k) || icontains(name, k)) return true;
+namespace {
+// substring "tun" matched teredo tunneling
+bool has_token(const string& hay, const char* tok) {
+    const string h = tolower_s(hay), t = tolower_s(tok);
+    for (size_t at = h.find(t); at != string::npos; at = h.find(t, at + 1)) {
+        const bool left = at == 0 || !std::isalnum((unsigned char)h[at - 1]);
+        const size_t end = at + t.size();
+        const bool right = end >= h.size() || !std::isalnum((unsigned char)h[end]);
+        if (left && right) return true;
+    }
     return false;
+}
+}
+
+bool adapter_is_tunnel(unsigned long if_type, const string& desc, const string& name) {
+    // teredo, 6to4, isatap, ip-https: windows' own ipv6 transition
+    if (if_type == IF_TYPE_TUNNEL || if_type == IF_TYPE_SOFTWARE_LOOPBACK) return false;
+    if (if_type == IF_TYPE_PPP) return true;
+    static const char* kw[] = {
+        "wintun", "wireguard", "tap-windows", "tap-protonvpn", "sing-tun", "openvpn",
+        "nordlynx", "mullvad", "protonvpn", "amneziawg", "amnezia", "warp", "hiddify",
+        "sing-box", "singbox", "throne", "nekoray", "clash", "v2ray", "xray", "tailscale",
+        "zerotier", "expressvpn", "surfshark", "torguard", "outline",
+    };
+    for (auto k : kw) if (has_token(desc, k) || has_token(name, k)) return true;
+    // wintun and tap register as proprietary virtual
+    return if_type == IF_TYPE_PROP_VIRTUAL && (has_token(desc, "tunnel") || has_token(desc, "tun"));
 }
 
 vector<LocalAdapter> list_local_adapters() {
@@ -61,6 +78,7 @@ vector<LocalAdapter> list_local_adapters() {
             A.mac = mac_to_str(p->PhysicalAddress, p->PhysicalAddressLength);
         A.mtu = p->Mtu;
         A.if_index = p->IfIndex;
+        A.if_type = p->IfType;
         A.is_up = (p->OperStatus == IfOperStatusUp);
         for (auto* u = p->FirstUnicastAddress; u; u = u->Next) {
             string s = sockaddr_to_str(u->Address.lpSockaddr);
@@ -72,10 +90,27 @@ vector<LocalAdapter> list_local_adapters() {
             string s = sockaddr_to_str(g->Address.lpSockaddr);
             if (!s.empty()) A.gateways.push_back(s);
         }
-        A.is_vpn = adapter_is_vpn(A.description, A.friendly);
+        A.is_vpn = adapter_is_tunnel(A.if_type, A.description, A.friendly);
         out.push_back(std::move(A));
     }
     return out;
+}
+
+bool routes_cover_default(const vector<string>& p) {
+    auto has = [&](const char* x) { return std::find(p.begin(), p.end(), x) != p.end(); };
+    return has("0.0.0.0/0") || (has("0.0.0.0/1") && has("128.0.0.0/1"));
+}
+
+unsigned long best_interface_for(const string& ip) {
+    sockaddr_storage ss{};
+    auto* v4 = (sockaddr_in*)&ss;
+    auto* v6 = (sockaddr_in6*)&ss;
+    if (inet_pton(AF_INET, ip.c_str(), &v4->sin_addr) == 1) v4->sin_family = AF_INET;
+    else if (inet_pton(AF_INET6, ip.c_str(), &v6->sin6_addr) == 1) v6->sin6_family = AF_INET6;
+    else return 0;
+    DWORD idx = 0;
+    if (GetBestInterfaceEx((sockaddr*)&ss, &idx) != NO_ERROR) return 0;
+    return idx;
 }
 
 vector<LocalRoute> list_local_routes() {
@@ -104,41 +139,50 @@ vector<LocalRoute> list_local_routes() {
 }
 
 namespace {
-struct KnownProc { const char* exe; const char* category; };
+struct KnownProc { const char* exe; const char* category; ProcKind kind; };
 const KnownProc VPN_PROCESSES[] = {
-    {"xray.exe",          "Xray-core"},
-    {"v2ray.exe",         "V2Ray"},
-    {"sing-box.exe",      "sing-box"},
-    {"singbox.exe",       "sing-box"},
-    {"v2rayN.exe",        "v2rayN (GUI -> Xray)"},
-    {"v2rayNG.exe",       "v2rayNG"},
-    {"nekoray.exe",       "NekoRay (GUI -> sing-box/Xray)"},
-    {"nekobox.exe",       "NekoBox"},
-    {"Hiddify.exe",       "Hiddify"},
-    {"HiddifyCli.exe",    "Hiddify CLI"},
-    {"HiddifyTray.exe",   "Hiddify tray"},
-    {"wg.exe",            "WireGuard CLI"},
-    {"WireGuard.exe",     "WireGuard (Windows client)"},
-    {"wireguard.exe",     "WireGuard"},
-    {"tunnel.exe",        "WireGuard tunnel service"},
-    {"tun2socks.exe",     "tun2socks"},
-    {"openvpn.exe",       "OpenVPN"},
-    {"openvpn-gui.exe",   "OpenVPN GUI"},
-    {"warp-svc.exe",      "Cloudflare WARP service"},
-    {"Cloudflare WARP.exe","Cloudflare WARP"},
-    {"ProtonVPN.exe",     "ProtonVPN"},
-    {"NordVPN.exe",       "NordVPN"},
-    {"ExpressVPN.exe",    "ExpressVPN"},
-    {"Mullvad VPN.exe",   "Mullvad"},
-    {"Shadowsocks.exe",   "Shadowsocks"},
-    {"ShadowsocksR.exe",  "ShadowsocksR"},
-    {"clash.exe",         "Clash"},
-    {"clash-verge.exe",   "Clash Verge"},
-    {"ClashForWindows.exe","Clash for Windows"},
-    {"AmneziaVPN.exe",    "AmneziaVPN"},
-    {"amneziawg.exe",     "AmneziaWG"},
-    {"cisco-vpn.exe",     "Cisco AnyConnect"},
-    {"vpncli.exe",        "Cisco AnyConnect CLI"},
+    {"xray.exe",          "Xray-core", ProcKind::Proxy},
+    {"v2ray.exe",         "V2Ray", ProcKind::Proxy},
+    {"sing-box.exe",      "sing-box", ProcKind::Proxy},
+    {"singbox.exe",       "sing-box", ProcKind::Proxy},
+    {"v2rayN.exe",        "v2rayN (GUI -> Xray)", ProcKind::Proxy},
+    {"v2rayNG.exe",       "v2rayNG", ProcKind::Proxy},
+    {"nekoray.exe",       "NekoRay (GUI -> sing-box/Xray)", ProcKind::Proxy},
+    {"nekobox.exe",       "NekoBox", ProcKind::Proxy},
+    {"Throne.exe",        "Throne (GUI -> sing-box)", ProcKind::Proxy},
+    {"ThroneCore.exe",    "Throne core (sing-box)", ProcKind::Proxy},
+    {"Hiddify.exe",       "Hiddify", ProcKind::Proxy},
+    {"HiddifyCli.exe",    "Hiddify CLI", ProcKind::Proxy},
+    {"HiddifyTray.exe",   "Hiddify tray", ProcKind::Proxy},
+    {"Proxifier.exe",     "Proxifier", ProcKind::Proxy},
+    {"ciadpi.exe",        "ByeDPI", ProcKind::Proxy},
+    {"spoofdpi.exe",      "SpoofDPI", ProcKind::Proxy},
+    {"wg.exe",            "WireGuard CLI", ProcKind::Vpn},
+    {"WireGuard.exe",     "WireGuard (Windows client)", ProcKind::Vpn},
+    {"wireguard.exe",     "WireGuard", ProcKind::Vpn},
+    {"tunnel.exe",        "WireGuard tunnel service", ProcKind::Vpn},
+    {"tun2socks.exe",     "tun2socks", ProcKind::Vpn},
+    {"openvpn.exe",       "OpenVPN", ProcKind::Vpn},
+    {"openvpn-gui.exe",   "OpenVPN GUI", ProcKind::Vpn},
+    {"warp-svc.exe",      "Cloudflare WARP service", ProcKind::Vpn},
+    {"Cloudflare WARP.exe","Cloudflare WARP", ProcKind::Vpn},
+    {"ProtonVPN.exe",     "ProtonVPN", ProcKind::Vpn},
+    {"NordVPN.exe",       "NordVPN", ProcKind::Vpn},
+    {"ExpressVPN.exe",    "ExpressVPN", ProcKind::Vpn},
+    {"Mullvad VPN.exe",   "Mullvad", ProcKind::Vpn},
+    {"Shadowsocks.exe",   "Shadowsocks", ProcKind::Proxy},
+    {"ShadowsocksR.exe",  "ShadowsocksR", ProcKind::Proxy},
+    {"clash.exe",         "Clash", ProcKind::Proxy},
+    {"clash-verge.exe",   "Clash Verge", ProcKind::Proxy},
+    {"ClashForWindows.exe","Clash for Windows", ProcKind::Proxy},
+    {"AmneziaVPN.exe",    "AmneziaVPN", ProcKind::Vpn},
+    {"amneziawg.exe",     "AmneziaWG", ProcKind::Vpn},
+    {"cisco-vpn.exe",     "Cisco AnyConnect", ProcKind::Vpn},
+    {"vpncli.exe",        "Cisco AnyConnect CLI", ProcKind::Vpn},
+    // windivert based, rewrite outgoing packets
+    {"winws.exe",         "zapret (winws)", ProcKind::Rewriter},
+    {"goodbyedpi.exe",    "GoodbyeDPI", ProcKind::Rewriter},
+    {"clumsy.exe",        "clumsy (loss emulator)", ProcKind::Rewriter},
 };
 constexpr size_t VPN_PROCESSES_N = sizeof(VPN_PROCESSES) / sizeof(VPN_PROCESSES[0]);
 
@@ -182,6 +226,7 @@ vector<LocalProcess> list_vpn_processes() {
                     LP.pid = pe.th32ProcessID;
                     LP.name = name;
                     LP.category = VPN_PROCESSES[i].category;
+                    LP.kind = VPN_PROCESSES[i].kind;
                     HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
                     if (h) {
                         wchar_t path[MAX_PATH] = {0};
@@ -218,7 +263,7 @@ vector<ConfigHit> find_known_configs() {
 }
 
 void run_local_analysis() {
-    printf("\n%s[LOCAL ANALYSIS] This machine — adapters, routes, VPN software%s\n\n",
+    printf("\n%s[LOCAL ANALYSIS] This machine: adapters, routes, VPN software%s\n\n",
            col(C::BOLD), col(C::RST));
 
     auto adapters = list_local_adapters();
@@ -268,24 +313,32 @@ void run_local_analysis() {
 
     printf("\n%s[3/4] Tunneling mode%s\n", col(C::BOLD), col(C::RST));
     bool has_vpn_if   = vpn_up > 0;
-    bool default_via_vpn = !defaults_v4.empty() && defaults_v4.front()->via_vpn;
+    vector<string> vpn_prefixes;
+    for (auto& R: routes) if (R.via_vpn) vpn_prefixes.push_back(R.prefix);
+    // wireguard and openvpn def1 install 0/1 + 128/1, not 0/0
+    const unsigned long probe_if = best_interface_for("1.1.1.1");
+    bool public_via_vpn = false;
+    for (auto& A: adapters) if (A.if_index == probe_if && A.is_vpn) public_via_vpn = true;
+    bool default_via_vpn = (!defaults_v4.empty() && defaults_v4.front()->via_vpn) ||
+                           routes_cover_default(vpn_prefixes) || public_via_vpn;
+    auto is_split_default = [](const string& p) { return p == "0.0.0.0/1" || p == "128.0.0.0/1" || p == "::/1" || p == "8000::/1"; };
     bool has_vpn_specific_route = false;
     for (auto& R: routes) {
-        if (R.via_vpn && R.prefix != "0.0.0.0/0" && R.prefix != "::/0"
+        if (R.via_vpn && R.prefix != "0.0.0.0/0" && R.prefix != "::/0" && !is_split_default(R.prefix)
             && R.prefix.find("/32") == string::npos && R.prefix.find("/128") == string::npos)
             has_vpn_specific_route = true;
     }
     if (!has_vpn_if) {
-        printf("  %s! No VPN adapter active — you're on raw ISP connection%s\n",
+        printf("  %s! No VPN adapter active: you're on raw ISP connection%s\n",
                col(C::YEL), col(C::RST));
     } else if (default_via_vpn && !has_vpn_specific_route) {
-        printf("  %sFULL-TUNNEL%s — all traffic routed through VPN adapter \"%s\"\n",
+        printf("  %sFULL-TUNNEL%s: all traffic routed through VPN adapter \"%s\"\n",
                col(C::GRN), col(C::RST), defaults_v4.front()->via_adapter.c_str());
     } else if (default_via_vpn && has_vpn_specific_route) {
         printf("  %sFULL-TUNNEL + extra VPN-specific routes%s (likely VPN provider pushed split rules)\n",
                col(C::GRN), col(C::RST));
     } else if (!default_via_vpn && has_vpn_specific_route) {
-        printf("  %sSPLIT-TUNNEL%s — default route goes via ISP, but selected subnets go through VPN:\n",
+        printf("  %sSPLIT-TUNNEL%s: default route goes via ISP, but selected subnets go through VPN:\n",
                col(C::MAG), col(C::RST));
         int shown = 0;
         for (auto& R: routes) {
@@ -296,7 +349,7 @@ void run_local_analysis() {
             }
         }
     } else {
-        printf("  %s? Mixed state%s — VPN adapter up, but default route NOT via VPN\n",
+        printf("  %s? Mixed state%s: VPN adapter up, but default route NOT via VPN\n",
                col(C::YEL), col(C::RST));
     }
 

@@ -1,32 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// byte-accurate Chrome 131 ClientHello construction.
+// synthetic clienthello builders.
 //
-// the v2.5.9 "chrome-flavored" probe approximated Chrome by tweaking an
-// OpenSSL SSL_CTX (cipher list, groups, sigalgs order). that is NOT a real
-// Chrome hello: the extension order is OpenSSL's, there is no GREASE
-// injection, no padding extension, no GREASE key_share. a uTLS-enforcing
-// Reality server tells the two apart and the v2.5.9 probe could not.
+// build_chromelike_clienthello: the pre-ml-kem chrome extension set with
+// GREASE at the spec positions, a GREASE-prefixed x25519 key_share and
+// boringssl-style padding. its ja4 is t13d1516h2_8daaf6152771_e5627efa2ab1,
+// the foxio example, which chrome sent before x25519mlkem768.
 //
-// this builder emits the actual wire bytes Chrome sends: GREASE values at
-// the spec positions (cipher list, supported_groups, key_share,
-// supported_versions, two bookend extensions), the Chrome extension set,
-// a GREASE-prefixed x25519 key_share, and the padding extension sized the
-// way BoringSSL sizes it. the 32-byte random, the 32-byte legacy session
-// id, the key_share public value and the GREASE selections are randomized
-// per call.
+// not a current chrome hello: the extension order is fixed (chrome permutes
+// it per connection), there is no x25519mlkem768 key share and no
+// encrypted_client_hello GREASE. treat it as its own fingerprint, not as
+// browser traffic.
 //
-// one extension is intentionally omitted: encrypted_client_hello (0xfe0d).
-// a GREASE ECH carries an HPKE-shaped body Chrome 131 fills from its ECH
-// config cache; emitting a static one would be LESS accurate than omitting
-// it. without ECH the JA4 is t13d1516h2 (Chrome ~120-130), still a real
-// browser fingerprint, never the openssl-default JA4.
+// build_minimal_clienthello: the small tls 1.3-only hello used by the j3
+// invalid-sni probe. one suite, x25519 only, empty key_share list.
 #pragma once
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-// build a Chrome-131-class ClientHello for the given SNI.
-// returns a complete TLS plaintext record (5-byte record header followed by
-// the handshake message) ready to write straight to a connected socket.
-std::vector<uint8_t> build_chrome131_clienthello(const std::string& sni);
+// each returns a complete tls plaintext record (5-byte record header
+// followed by the handshake message) ready to write to a connected socket.
+std::vector<uint8_t> build_chromelike_clienthello(const std::string& sni);
+std::vector<uint8_t> build_minimal_clienthello(const std::string& sni);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "chrome_ch.h"
+#include "../common/util.h"
 
 #include <openssl/rand.h>
 
@@ -8,19 +9,19 @@ using std::vector;
 
 namespace {
 
-// the 16 RFC 8701 GREASE values. Chrome picks one per slot, not necessarily
+// the 16 rfc 8701 GREASE values. chrome picks one per slot, not necessarily
 // the same one in every slot, so we draw fresh each time.
 const uint16_t GREASE[16] = {
     0x0a0a, 0x1a1a, 0x2a2a, 0x3a3a, 0x4a4a, 0x5a5a, 0x6a6a, 0x7a7a,
     0x8a8a, 0x9a9a, 0xaaaa, 0xbaba, 0xcaca, 0xdada, 0xeaea, 0xfafa
 };
 
-// CSPRNG-backed RNG. all randomness here goes through OpenSSL RAND_bytes so
-// the ClientHello carries no observable PRNG pattern. RAND_bytes return is
-// not checked: on a system where OpenSSL's RNG cannot seed at all, falling
-// back to zeros still produces a syntactically valid ClientHello (the bytes
-// in question are random-looking fields the peer does not validate against
-// us; we are not running the TLS 1.3 key schedule on this path).
+// csprng-backed rng. all randomness here goes through openssl RAND_bytes so
+// the clienthello carries no observable prng pattern. RAND_bytes return is
+// not checked: on a system where openssl's rng can't seed at all, falling
+// back to zeros still produces a syntactically valid clienthello (the bytes
+// in question are random-looking fields the peer doesn't validate against
+// us; we aren't running the tls 1.3 key schedule on this path).
 uint8_t rand_u8() {
     uint8_t b = 0;
     RAND_bytes(&b, 1);
@@ -61,16 +62,16 @@ void ext(B& b, uint16_t type, Fn&& body) {
 
 } // namespace
 
-std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
+std::vector<uint8_t> build_chromelike_clienthello(const string& sni) {
     auto rbyte = []{ return rand_u8(); };
 
     // GREASE values, drawn once up front. two constraints, both enforced by
-    // a strict server (OpenSSL rejects violations):
-    //   * the supported_groups GREASE and the key_share GREASE group MUST be
-    //     the same value — a KeyShareEntry has to correspond to a group
-    //     offered in supported_groups (RFC 8446 4.2.8). a mismatch is "bad
+    // a strict server (openssl rejects violations):
+    //   * the supported_groups GREASE and the key_share GREASE group must be
+    //     the same value - a keyshareentry has to correspond to a group
+    //     offered in supported_groups (rfc 8446 4.2.8). a mismatch is "bad
     //     key share".
-    //   * the two bookend extension types MUST differ from each other, or it
+    //   * the two bookend extension types must differ from each other, or it
     //     is a duplicate extension type.
     // the cipher-list and supported_versions GREASE values are unconstrained.
     const uint16_t g_cipher = grease_value();
@@ -80,30 +81,31 @@ std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
     uint16_t g_ext2 = grease_value();
     while (g_ext2 == g_ext1) g_ext2 = grease_value();
 
-    // ---- extensions block, built standalone so the padding extension can
-    //      be sized against the finished pre-pad ClientHello length --------
+    // extensions block, built standalone so the padding extension can
+    //      be sized against the finished pre-pad clienthello length
     B ex;
 
-    // GREASE (leading bookend) — empty body.
+    // GREASE (leading bookend) - empty body.
     ext(ex, g_ext1, []{});
 
-    // server_name (0x0000)
+    // server_name (0x0000), chrome omits it for ip literals
+    if (!sni.empty() && !is_ip_literal(sni))
     ext(ex, 0x0000, [&]{
-        size_t lo = ex.mark16();      // ServerNameList length
+        size_t lo = ex.mark16();      // servernamelist length
         ex.u8(0x00);                  // name_type = host_name
-        size_t no = ex.mark16();      // HostName length
+        size_t no = ex.mark16();      // hostname length
         ex.str(sni);
         ex.patch16(no);
         ex.patch16(lo);
     });
 
-    // extended_master_secret (0x0017) — empty.
+    // extended_master_secret (0x0017) - empty.
     ext(ex, 0x0017, []{});
 
-    // renegotiation_info (0xff01) — one zero byte (empty renegotiated_connection).
+    // renegotiation_info (0xff01) - one zero byte (empty renegotiated_connection).
     ext(ex, 0xff01, [&]{ ex.u8(0x00); });
 
-    // supported_groups (0x000a) — GREASE, x25519, secp256r1, secp384r1.
+    // supported_groups (0x000a) - GREASE, x25519, secp256r1, secp384r1.
     ext(ex, 0x000a, [&]{
         size_t lo = ex.mark16();
         ex.u16(g_group);
@@ -113,13 +115,13 @@ std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
         ex.patch16(lo);
     });
 
-    // ec_point_formats (0x000b) — uncompressed only.
+    // ec_point_formats (0x000b) - uncompressed only.
     ext(ex, 0x000b, [&]{ ex.u8(0x01); ex.u8(0x00); });
 
-    // session_ticket (0x0023) — empty.
+    // session_ticket (0x0023) - empty.
     ext(ex, 0x0023, []{});
 
-    // ALPN (0x0010) — h2, http/1.1.
+    // alpn (0x0010) - h2, http/1.1.
     ext(ex, 0x0010, [&]{
         size_t lo = ex.mark16();
         ex.u8(2); ex.str("h2");
@@ -127,10 +129,10 @@ std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
         ex.patch16(lo);
     });
 
-    // status_request (0x0005) — OCSP, empty responder_id + extensions.
+    // status_request (0x0005) - ocsp, empty responder_id + extensions.
     ext(ex, 0x0005, [&]{ ex.u8(0x01); ex.u16(0x0000); ex.u16(0x0000); });
 
-    // signature_algorithms (0x000d) — Chrome's 8-entry list, in order.
+    // signature_algorithms (0x000d) - chrome's 8-entry list, in order.
     ext(ex, 0x000d, [&]{
         size_t lo = ex.mark16();
         ex.u16(0x0403);  // ecdsa_secp256r1_sha256
@@ -144,11 +146,11 @@ std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
         ex.patch16(lo);
     });
 
-    // signed_certificate_timestamp (0x0012) — empty.
+    // signed_certificate_timestamp (0x0012) - empty.
     ext(ex, 0x0012, []{});
 
-    // key_share (0x0033) — GREASE (1-byte key) + x25519 (32-byte key).
-    // the GREASE group here MUST equal the supported_groups GREASE.
+    // key_share (0x0033) - GREASE (1-byte key) + x25519 (32-byte key).
+    // the GREASE group here must equal the supported_groups GREASE.
     ext(ex, 0x0033, [&]{
         size_t lo = ex.mark16();
         ex.u16(g_group); ex.u16(0x0001); ex.u8(0x00);
@@ -157,10 +159,10 @@ std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
         ex.patch16(lo);
     });
 
-    // psk_key_exchange_modes (0x002d) — psk_dhe_ke.
+    // psk_key_exchange_modes (0x002d) - psk_dhe_ke.
     ext(ex, 0x002d, [&]{ ex.u8(0x01); ex.u8(0x01); });
 
-    // supported_versions (0x002b) — GREASE, TLS 1.3, TLS 1.2.
+    // supported_versions (0x002b) - GREASE, tls 1.3, tls 1.2.
     ext(ex, 0x002b, [&]{
         size_t lo = ex.v.size(); ex.u8(0);
         ex.u16(g_ver);
@@ -169,22 +171,22 @@ std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
         ex.v[lo] = (uint8_t)(ex.v.size() - lo - 1);
     });
 
-    // compress_certificate (0x001b) — brotli.
+    // compress_certificate (0x001b) - brotli.
     ext(ex, 0x001b, [&]{ ex.u8(0x02); ex.u16(0x0002); });
 
-    // application_settings / ALPS (0x4469) — h2.
+    // application_settings / alps (0x4469) - h2.
     ext(ex, 0x4469, [&]{
         size_t lo = ex.mark16();
         ex.u8(2); ex.str("h2");
         ex.patch16(lo);
     });
 
-    // GREASE (trailing bookend) — Chrome's trailing GREASE ext carries a
+    // GREASE (trailing bookend) - chrome's trailing GREASE ext carries a
     // single zero byte. its type must differ from the leading bookend.
     ext(ex, g_ext2, [&]{ ex.u8(0x00); });
 
-    // ---- padding (0x0015) -------------------------------------------------
-    // BoringSSL pads the ClientHello to 512 bytes when the handshake message
+    // padding (0x0015)
+    // boringssl pads the clienthello to 512 bytes when the handshake message
     // would otherwise land in [256, 512). kFixedPrefix is the byte count of
     // everything in the handshake message before the extensions block:
     //   1 type + 3 length + 2 legacy_version + 32 random
@@ -197,16 +199,16 @@ std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
         ext(ex, 0x0015, [&]{ for (size_t i = 0; i < pad; ++i) ex.u8(0x00); });
     }
 
-    // ---- assemble the record + handshake message --------------------------
+    // assemble the record + handshake message
     B out;
     out.u8(0x16);             // record type: handshake
-    out.u16(0x0301);          // record version: TLS 1.0 (legacy, like Chrome)
+    out.u16(0x0301);          // record version: tls 1.0 (legacy, like chrome)
     size_t rec_len = out.mark16();
 
-    out.u8(0x01);             // handshake type: ClientHello
+    out.u8(0x01);             // handshake type: clienthello
     size_t hs_len = out.mark24();
 
-    out.u16(0x0303);          // legacy_version: TLS 1.2
+    out.u16(0x0303);          // legacy_version: tls 1.2
     for (int i = 0; i < 32; ++i) out.u8(rbyte());   // random
     out.u8(32);
     for (int i = 0; i < 32; ++i) out.u8(rbyte());   // legacy_session_id
@@ -227,6 +229,53 @@ std::vector<uint8_t> build_chrome131_clienthello(const string& sni) {
     out.blob(ex.v);
     out.patch16(eb);
 
+    out.patch24(hs_len);
+    out.patch16(rec_len);
+    return out.v;
+}
+
+std::vector<uint8_t> build_minimal_clienthello(const string& sni) {
+    B ex;
+    ext(ex, 0x0000, [&]{
+        size_t lo = ex.mark16();
+        ex.u8(0x00);
+        size_t no = ex.mark16();
+        ex.str(sni);
+        ex.patch16(no);
+        ex.patch16(lo);
+    });
+    ext(ex, 0x0010, [&]{
+        size_t lo = ex.mark16();
+        ex.u8(8); ex.str("http/1.1");
+        ex.patch16(lo);
+    });
+    ext(ex, 0x000b, [&]{ ex.u8(0x01); ex.u8(0x00); });
+    ext(ex, 0x000a, [&]{ size_t lo = ex.mark16(); ex.u16(0x001d); ex.patch16(lo); });
+    ext(ex, 0x000d, [&]{
+        size_t lo = ex.mark16();
+        ex.u16(0x0401); ex.u16(0x0501); ex.u16(0x0807); ex.u16(0x0808);
+        ex.patch16(lo);
+    });
+    ext(ex, 0x002b, [&]{ ex.u8(0x02); ex.u16(0x0304); });
+    // empty client_shares: server must hrr or alert
+    ext(ex, 0x0033, [&]{ size_t lo = ex.mark16(); ex.patch16(lo); });
+
+    B out;
+    out.u8(0x16);
+    out.u16(0x0301);
+    size_t rec_len = out.mark16();
+    out.u8(0x01);
+    size_t hs_len = out.mark24();
+    out.u16(0x0303);
+    for (int i = 0; i < 32; ++i) out.u8(rand_u8());
+    out.u8(0x00);
+    size_t cs = out.mark16();
+    out.u16(0x1302);
+    out.patch16(cs);
+    out.u8(0x01); out.u8(0x00);
+    size_t eb = out.mark16();
+    out.blob(ex.v);
+    out.patch16(eb);
     out.patch24(hs_len);
     out.patch16(rec_len);
     return out.v;

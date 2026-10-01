@@ -11,7 +11,9 @@
 | |_) | |_| |  __/ |_) | |_| |  __/\ V / |  __/| |\  |
 |____/ \__, |\___|____/ \__, |\___| \_/  |_|   |_| \_|
        |___/            |___/
-   Full TSPU/DPI/VPN detectability scanner   v2.8.3
+  ──────────────────────────────────────────────────────
+  v3.0.0  ·  your node through a DPI box's eyes
+  ──────────────────────────────────────────────────────
 ```
 
 **Languages:** [English](#english) · [Русский](#русский) · [简体中文](README.zh-CN.md) · [فارسی](README.fa.md)
@@ -41,41 +43,43 @@ observer, the way an ISP or DPI middlebox sees it.
 ### Prerequisites (read before scanning)
 
 > **Disable any active VPN / Zapret / proxy on the host running the
-> scanner before you start.** the scanner uses the host's TCP/IP and
-> TLS stack to emit probes. if your host routes through a TUN /
-> sing-box / Zapret / GoodbyeDPI / proxifier, the wire-level signature
-> you measure on the target is **your local stack reflected**, not the
-> target's. specifically:
+> scanner before you start.** The scanner now checks this itself
+> (preflight, step 1b) and refuses to give a verdict when its own stack
+> is compromised:
 >
-> - latency anchors and RTT to anchors will be wrong, breaking SNITCH.
-> - ClientHello bytes may be rewritten by Zapret-style fragmentors,
->   breaking JA4 calculation.
-> - GeoIP queries will resolve YOUR exit IP, not the lookups you want.
-> - the `local` mode (`byebyevpn local`) is the one place where active
->   VPN matters in reverse: there the goal IS to inspect your own
->   adapters, but you still want to scan a remote target with the VPN
->   off.
+> | preflight finding | effect |
+> |---|---|
+> | the route to the target leaves through a tunnel adapter (Wintun, WireGuard, TAP, sing-tun, PPP) | **blocked**: no probe is sent, label `UNRELIABLE`, exit 5 |
+> | a TCP connect to `192.0.2.1` (RFC 5737, routed nowhere) succeeds on the target's route | **blocked**: a local stack accepts every SYN, every "open port" would be fake |
+> | zapret (winws), GoodbyeDPI or clumsy running | **blocked**: our packets are rewritten in flight |
+> | target resolves to a fake-IP or CGNAT address | **blocked** |
+> | `--expect-ip A` given and lookup services see another address | **blocked** |
+> | tunnel adapters up but the target route is direct | warning: GeoIP, CT and RTT anchors may go through the tunnel |
+> | proxy clients running, system proxy or `HTTP(S)_PROXY` set | warning |
+> | lookup services (ipify, icanhazip, ifconfig.me) disagree on our address | warning: egress depends on destination |
 >
-> turn the VPN/proxy off, run the scan, then re-enable. on Windows:
-> kill the v2rayN/sing-box/Zapret process and confirm
-> `Get-NetAdapter` shows no active TUN/WireGuard/Wintun/TAP-style
-> interfaces.
+> `--i-know-what-i-am-doing` runs the scan anyway; the verdict is then
+> marked as overridden in the report and in JSON. The external address
+> check is skipped under `--no-geoip` / `--stealth`. The `local` mode
+> (`byebyevpn local`) is the one place where an active VPN is the point.
 
 ### Pipeline
 
 | # | Module                          | What it does                                                            |
 |---|---------------------------------|-------------------------------------------------------------------------|
 | 1  | DNS resolve                     | A + AAAA, IPv4 preferred                                                |
-| 2  | GeoIP aggregation               | 5 HTTPS-only providers in parallel, ASN + flags                         |
-| 3a | TCP port scan                   | Connect-scan 1-65535 (default) or 205 curated ports, 500 threads        |
-| 3b | TCP stack fingerprint           | Handshake distribution + SIO_TCP_INFO peer window/MSS + closed-port behavior, no admin |
-| 4  | UDP probes                      | WireGuard / AmneziaWG / Hysteria2 handshakes                            |
-| 4b | AmneziaWG S1 deep-probe (v2.6.0)| Junk-prefix size sweep on :51820, recovers the configured S1 parameter  |
+| 1b | Preflight                       | Tunnel on the target route, local ack-all, packet rewriters, proxies, external address; blocks the verdict when the scanner itself is compromised |
+| 2  | GeoIP aggregation               | 5 HTTPS-only providers in parallel, ASN + flags; reference only, never scored |
+| 3a | TCP port scan                   | Connect-scan 1-65535 (default) or 205 curated ports, 500 threads; no SYN retransmission, so a closed port reads as refused, not timeout |
+| 3a | Path check + ack-all control    | 10 connects to the first open port (loss, RTT); 3 random dynamic-range ports that must refuse |
+| 3b | TCP stack fingerprint           | Handshake distribution + SIO_TCP_INFO peer window/MSS + closed-port reply, no admin; reference only, no OS guess |
+| 4  | UDP probes                      | WireGuard / AmneziaWG / QUIC: replies validated against each protocol's response layout |
+| 4b | AmneziaWG S1 deep-probe (v2.6.0)| Junk-prefix size sweep on :51820, response experiment only; cannot confirm AWG/S1  |
 | 5  | Service fingerprint + CT        | SSH, HTTP, TLS + SNI consistency, SOCKS5, CONNECT, Shadowsocks, crt.sh, proxy-header leak |
-| 5b | uTLS dual-probe + JA4 + JA4S    | Two ClientHellos per TLS port (byte-accurate Chrome 131 vs openssl-default), JA4 / JA4S extracted from raw CH/SH bytes, JA4S classified against a backend-stack table |
-| 6  | J3 / TSPU active probing        | 8 probes per TLS port (Reality discriminator)                           |
+| 5b | uTLS dual-probe + JA4 + JA4S    | Two ClientHellos per TLS port (synthetic Chrome-style hello vs openssl-default), JA4 / JA4S extracted from raw CH/SH bytes, JA4S classified against a backend-stack table |
+| 6  | J3 / TSPU active probing        | 8 probes per TLS port; reply / closed / reset / held open per probe, reference only |
 | 7  | SNITCH + traceroute + SSTP      | RTT vs GeoIP (methodika §10.1), ICMP hop-count, Microsoft SSTP          |
-| 8  | Verdict + TSPU emulation        | Score 0-100, stack identification, 3-tier TSPU ruling, hardening advice |
+| 8  | Verdict                         | Checks with passports, coverage, score 0-100 or INCONCLUSIVE / UNRELIABLE with reasons, blind spots |
 
 ### UDP handshakes
 
@@ -90,9 +94,73 @@ detection value for this niche.
 | 51820      | WireGuard          | 148-byte MessageInitiation, randomized body           |
 | 51820      | AmneziaWG Sx=8     | Delta-probe: vanilla WG rejected, Sx=8 prefix accepted |
 | 55555      | AmneziaWG Sx=8     | 8-byte junk prefix + WG init                          |
-| 51820      | AmneziaWG S1 sweep | 12-step junk-prefix size sweep, recovers configured S1 |
+| 51820      | AmneziaWG S1 sweep | 12-step junk-prefix size sweep, does not identify AWG or S1 |
 | 36712      | Hysteria2          | QUIC v1 Initial, random DCID                          |
 | 443        | Hysteria2          | QUIC v1 Initial on :443                               |
+| 51820 or `--wg-port` | WireGuard keyed | full MessageInitiation from the owner's peer key; only with `--wg-pubkey` and `--wg-key` |
+
+#### What a UDP reply is allowed to prove
+
+A datagram coming back is not evidence of a protocol: echo services,
+reflectors and generic middleboxes all answer. Every reply is matched
+against the protocol's real response layout before it can move the score
+(`src/scan/udp_validate.h`), and any verbatim echo of our own payload is
+discarded outright:
+
+- **WireGuard**: accepted only on a valid `MessageResponse` (type `0x02`,
+  three reserved zero bytes, exactly 92 bytes) or a cookie reply (type
+  `0x03`, 64 bytes) whose receiver index equals the sender index of our
+  probe. Before this check, 92 bytes of unrelated `02 00 00 00` garbage
+  scored `IMMEDIATE BLOCK` (lab stand K). A reply triggers two more probes;
+  two agreeing replies are required. Real WireGuard and AmneziaWG never
+  answer a probe without the server key and a known peer key, so on real
+  servers this stays silent and is reported as not measured. The owner can
+  check a WireGuard node with keys, see below.
+- **AmneziaWG**: accepted on a WG `MessageResponse` sitting behind a junk
+  prefix, which is what AmneziaWG emits with default `H1`-`H4`. This is
+  reported as *AmneziaWG-consistent*, not confirmed: it is unauthenticated,
+  and a custom `H1`-`H4` set rewrites the type byte and will not match at
+  all. The S1 sweep is a response experiment; it does not recover S1.
+- **QUIC**: a valid QUIC packet confirms a **QUIC endpoint**, nothing more.
+  HTTP/3 is ordinary web traffic and every QUIC stack answers an Initial
+  identically, so this is a note and never moves the score, on any port.
+  The seven preset ports are probed before open TCP ports; ports cut by
+  the 12-port cap are listed as not probed.
+
+None of these authenticates the peer: the scanner holds no key. They rule
+out the accidental false positives, which is the most a score is entitled
+to rest on. For real AmneziaWG evidence use `awg-entropy` on captured
+traffic (see below).
+
+#### WireGuard self-check with your own keys
+
+```
+byebyevpn scan <your-node> --wg-pubkey server.pub --wg-key peer.key [--wg-psk peer.psk] [--wg-port 51820]
+byebyevpn udp  <your-node> --wg-pubkey <base64> --wg-key peer.key
+```
+
+A WireGuard server answers nobody without keys: mac1 needs the server
+public key, and after mac1 the server decrypts the initiator's static key
+and silently drops a peer it does not know. So the check needs the server
+public key **and** the private key of a peer configured on that server,
+both from your own configs. With them the scanner sends a normal
+148-byte initiation (fresh ephemeral, TAI64N timestamp rounded like
+wireguard-go) and checks the reply cryptographically: a response whose mac1
+verifies can only come from the holder of the server private key. Two
+agreeing answers, 1 to 1.5 s apart, give `wg-keyed` positive (tier A, -15,
+counted once together with `wg-family`). Silence is inconclusive: a wrong
+key, a filter and no listener look the same. A preshared key that differs
+is reported as such and still counts, since mac1 already proved the server.
+
+- the public key may be given as text or a file; the private key and the
+  preshared key only as files, so they never sit in the process list;
+- keys are never printed and never written to JSON (`wg_self_check` holds
+  `requested`, `ran` and `port`);
+- the server moves that peer's endpoint to this machine until the peer's
+  own client sends again: use a spare peer for the check;
+- it measures the path from this machine to the node at this moment. It
+  does not cover AmneziaWG with junk or custom headers, which drops a plain
+  initiation (inconclusive, not "hidden").
 
 ### J3 probes
 
@@ -107,26 +175,73 @@ Eight probe types fired at every TLS-capable port:
 7. Absolute-URI proxy-style `GET`
 8. `0xFF × 128`
 
-Reality / XTLS silently drops all 8; regular HTTP returns 400/403. The
-pattern is the diagnostic signal.
+Each probe ends in one of: reply, closed by peer (FIN), reset (RST), no
+reply with the connection held open, or no connect. Earlier builds printed
+all non-replies as `SILENT (dropped)` and called six of them
+"silent-on-junk (TLS-only / Reality-hidden)" on a plain nginx-like site.
+The counts are only read when a well-formed TLS or HTTP exchange worked on
+the same port (control); on a lossy path silence is declared not evidence.
+J3 is reference output: it never moves the score and does not identify
+Reality, Vision or any other protocol.
+
+TLS certificates, HTTPS parsing and crt.sh lookup limits are documented in
+[TLS/HTTP observations](docs/WEB_OBSERVATIONS.md). Short-lived certificates,
+missing `Server` headers and CT lookup misses do not reduce the score.
 
 ### Verdict scale
 
 | Score  | Label          | Meaning                                           |
 |--------|----------------|---------------------------------------------------|
-| 85-100 | `CLEAN`        | Looks like a regular web server                   |
-| 70-84  | `NOISY`        | Suspicious artefacts, not necessarily VPN        |
-| 50-69  | `SUSPICIOUS`   | Multiple red flags                                |
-| < 50   | `OBVIOUSLY VPN`| Trivially detected - obfuscation / stack change needed |
+| 85-100 | `CLEAN`        | Few or no weighted indicators matched |
+| 70-84  | `NOISY`        | Some weighted indicators matched |
+| 50-69  | `SUSPICIOUS`   | More weighted indicators matched |
+| < 50   | `OBVIOUSLY VPN`| Many or heavily weighted indicators matched |
+
+| -      | `INCONCLUSIVE` | The scan did not happen in a way that supports a verdict; reasons are listed |
+| -      | `UNRELIABLE`   | Preflight failed; the results describe this machine, not the target |
+
+These are legacy heuristic labels, not protocol confirmation or detection
+probabilities. `CLEAN` means that no named signature answered. It does not
+mean the node is invisible to DPI: every report lists what these probes
+cannot see (Reality with a working target, Shadowsocks AEAD/2022,
+WireGuard without the owner's keys, AmneziaWG, Trojan or VLESS behind a
+real site).
+
+Only four signals move the score, each with a passport in
+[docs/SIGNALS.md](docs/SIGNALS.md): `wg-family` (-15), `wg-keyed` (-15,
+owner self-check, one score together with `wg-family`), `sstp` (-18),
+`socks5` (-20), all tier A. Every check ends as positive, negative,
+inconclusive or not applicable; only positives move the score, and a
+positive needs two agreeing observations out of at most three. GeoIP tags,
+junk probes, TCP stack data, JA4S families and RTT are reference output.
+
+No verdict is given when: preflight failed; 2 of 3 random control ports
+accepted a connection (ack-all path); the path check lost 50% or more;
+more than half of the applicable signature checks were inconclusive; the
+TCP scan was interrupted; or no service answered in an attributable way.
+
+Any tier A match caps the score at 69, so the label is at least
+`SUSPICIOUS` and the exit code at least 2. Earlier builds could print
+`CLEAN 85` next to `IMMEDIATE BLOCK` for a single WireGuard-shaped reply.
+The error matrix of every signal against known targets is in
+[docs/GROUNDTRUTH.md](docs/GROUNDTRUTH.md) and
+[docs/CALIBRATION.md](docs/CALIBRATION.md).
 
 ### TSPU emulation
 
 | Tier | Verdict          | Meaning                                                 |
 |------|------------------|---------------------------------------------------------|
-| A≥1  | `IMMEDIATE BLOCK`| Named protocol signature - SYN/handshake dropped        |
-| B≥2  | `BLOCK` (cumul.) | ≥2 soft anomalies - classifier trips block threshold    |
-| B=1  | `THROTTLE / QoS` | 1 soft anomaly - flagged for monitoring / rate-limit    |
-| 0    | `PASS / ALLOW`   | No signatures                                           |
+| A≥1  | `IMMEDIATE BLOCK`| At least one legacy tier A rule matched |
+| B≥2  | `BLOCK` (cumul.) | At least two legacy tier B rules matched |
+| B=1  | `THROTTLE / QoS` | One legacy tier B rule matched |
+| 0    | `PASS / ALLOW`   | No rules in this model matched |
+
+This model does not reproduce a verified operator classifier. These category
+names are retained for compatibility and do not establish actual blocking,
+throttling or allowance. JSON marks `thresholds_validated` and `blocking_verified`
+as `false`. No current signal is tier B, so the two middle rows cannot occur;
+see [docs/TSPU-MODEL.md](docs/TSPU-MODEL.md) for why nothing supports an
+accumulative tier on the box.
 
 ### On-the-wire posture
 
@@ -134,23 +249,32 @@ The tool does not impersonate a browser. Every outbound HTTP request
 (to IP-intel services, to the target during HTTP-over-TLS audit, to
 crt.sh) goes out with zero tool-specific headers.
 
-For `http_get()` - the one used against IP-intel services and
-crt.sh - the request is byte-wise:
+For `http_get()` - the one used against IP-intel services, crt.sh and
+the DoH lookup of the `ech` command - the request is byte-wise
+(captured on loopback):
 
 ```
 GET /path HTTP/1.1
+Connection: Keep-Alive
 Host: <host>
 ```
 
-No `User-Agent`, no `Accept`, no `Accept-Language`, no
-`Accept-Encoding`, no `Sec-Fetch-*`, no `Upgrade-Insecure-Requests`.
-The endpoints all accept a bare GET - the same way `curl -sS
-https://ipwho.is/8.8.8.8` works without any flags. WinHTTP still
-transparently decompresses gzip'd responses server-side, but we
-don't advertise it.
+`Connection: Keep-Alive` is added by WinHTTP itself. The Cloudflare DoH
+fallback of `ech` adds `Accept: application/dns-json`, nothing else does.
+No `User-Agent`, no `Accept-Language`, no `Accept-Encoding`, no
+`Sec-Fetch-*`, no `Upgrade-Insecure-Requests`. Builds before this fix
+also sent `Accept-Encoding: gzip, deflate`. A compressed reply is now
+rejected instead of decoded.
 
 For `https_probe()` - the target HTTP-over-TLS audit - headers are
-also minimal (`Host`, `Accept: */*`, `Connection: close`).
+also minimal (`Host`, `Accept: */*`, `Connection: close`). `dpi --volume`
+sends the same three headers to the node and to the control host.
+
+The WireGuard self-check (`--wg-pubkey`, `--wg-key`) sends a full
+148-byte initiation built like a real client's: RAND_bytes ephemeral key
+and sender index, TAI64N timestamp with the low 24 bits of nanoseconds
+cleared as wireguard-go and the Linux module do, mac2 zero. Up to three,
+1.0 to 1.5 s apart.
 
 Earlier versions (v2.5 - v2.5.4) emitted a Chrome-131 header block
 intended to look "browser-like". That was itself a unique static
@@ -162,28 +286,46 @@ field that a real client would randomize is filled via OpenSSL
 `RAND_bytes`: WireGuard MessageInitiation body, AmneziaWG junk prefix +
 WG body, Hysteria2 QUIC DCID, TLS ClientRandom, invalid-SNI prefix.
 
-ICMP traceroute payload is the standard Windows `ping.exe` pattern
-(`abcdefghi...`, 32 bytes) - byte-identical to what any Windows box
-emits.
+ICMP traceroute payload is the Windows `ping.exe` pattern
+(`abcdefghijklmnopqrstuvwabcdefghi`, 32 bytes). Builds before this fix
+sent 33 bytes (the C string terminator went out too), which no Windows
+tool emits.
 
 The uTLS dual-probe (v2.6.0) sends two different ClientHellos per TLS
-port. The "chrome" side is a byte-accurate Chrome 131 ClientHello built
-by hand (`src/scan/chrome_ch.cpp`): GREASE at the spec positions, the
-Chrome extension set in order, a GREASE-prefixed x25519 key_share, the
-padding extension. It is exactly the bytes Chrome sends, not a tweaked
-OpenSSL context, so it carries no tool-identifying bytes - a uTLS
-fingerprint check sees Chrome. The "openssl" side is the default
-OpenSSL ClientHello, same as the existing `tls_probe`. SNI is the
-target's hostname in both. ClientHello / ServerHello bytes stay
-in-process; JA4 / JA4S hashes are computed locally and never
-transmitted. The "chrome accepted, openssl rejected" split is the
-uTLS-enforcement signal.
+port. The "chrome" side is a synthetic hello built by hand
+(`src/scan/chrome_ch.cpp`): the Chrome extension set from before
+X25519MLKEM768, GREASE at the spec positions, a GREASE-prefixed x25519
+key_share and the padding extension. Its JA4 is
+`t13d1516h2_8daaf6152771_e5627efa2ab1`, the FoxIO example value. It is
+not what a current Chrome sends: the extension order is fixed (Chrome
+permutes it per connection), there is no X25519MLKEM768 key share and no
+ECH GREASE. Treat it as its own fingerprint, not as browser traffic.
+The "openssl" side is the default OpenSSL ClientHello, same as the
+existing `tls_probe`. SNI is the target's hostname in both.
+ClientHello / ServerHello bytes stay in-process; JA4 / JA4S hashes are
+computed locally and never transmitted.
 
 The TCP stack fingerprint (3b) does not change anything on the wire.
 It runs 6 sequential `SOCK_STREAM` connects to an already-known open
 port, calls `WSAIoctl(SIO_TCP_INFO_v0)` on the local handle, and (if
 asked) tries one connect to a closed port. No raw socket, no admin,
 no extra packet shapes.
+
+Measurement-health traffic added for the false-positive work: preflight
+sends one SYN to `192.0.2.1` on a random port (only when the target shares
+its route) and, unless `--no-geoip`, one GET each to `api.ipify.org`,
+`icanhazip.com` and `ifconfig.me/ip` through `http_get()`. After the port
+scan: 10 connects to the first open port (path check) and one connect to
+each of 3 random ports in 49152-65535 (ack-all control). SOCKS5 greetings
+and SSTP setup requests are repeated until two agree (at most three);
+a WireGuard or AmneziaWG probe that gets a reply is sent twice more.
+Every connect is made with SYN retransmission off (`SIO_TCP_INITIAL_RTO`).
+
+TLS clients no longer put an IP literal into SNI (RFC 6066 section 3): with
+an IP target the OpenSSL probes send no SNI, the synthetic Chrome-style
+hello omits `server_name` (so its JA4 starts `t13i`), and the SSTP request
+uses the host name or no SNI plus a random correlation GUID instead of
+`{00000000-...}`.
 
 ### Audit
 
@@ -196,23 +338,25 @@ plus `src/main.cpp`. Expected matches: only the `--help` printf in
 ```
 $ grep -rnE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' \
     src --include='*.cpp' --include='*.h'
-src/app/cli.cpp:27:    printf("ByeByeVPN — full TSPU/DPI/VPN ...
+src/app/cli.cpp:131:    printf("ByeByeVPN - full TSPU/DPI/VPN ...
 ```
 
 None of these reach a socket. The CI workflow
-(`.github/workflows/release.yml`) fails the build if any additional
-match appears, and re-runs the grep across the full tree on every tag.
+(`.github/workflows/release.yml`) fails the build if more than three
+matches appear.
 
 ### Install
 
-Windows: download `byebyevpn-v2.8.3-win64.zip` from
+Windows: download `byebyevpn-v3.0.0-win64.zip` from
 [Releases](../../releases), extract, run `byebyevpn.exe` - either
-double-click for the interactive menu, or pass an IP/hostname from
+double-click for the interactive panel, or pass an IP/hostname from
 the terminal.
 
 Runtime: Windows 10 1803+ / 11 / Server 2019+. No admin, no DLLs, no
-.NET, no VC++ Redistributable. Internet access for GeoIP and
-CT-log lookups.
+.NET, no VC++ Redistributable. Internet access for GeoIP, CT-log, the
+preflight external-address check and the `ech` DoH lookup; all of them
+are optional (`--no-geoip`, `--no-ct`, `--stealth`). The panel needs a
+console with VT support (Windows Terminal or conhost on Windows 10+).
 
 Linux / macOS: run through Wine. Everything except `local`
 (host-side adapter enumeration) works identically.
@@ -225,7 +369,7 @@ signatures. See `BUILD.md` for the verify recipe.
 ### CLI
 
 ```bash
-byebyevpn                        # interactive menu
+byebyevpn                        # interactive panel
 byebyevpn <host>                 # full scan
 byebyevpn scan 1.2.3.4           # same, explicit
 byebyevpn <host> --json          # full scan, JSON on stdout (v2.6.0)
@@ -237,9 +381,79 @@ byebyevpn geoip 8.8.8.8          # geoip aggregation
 byebyevpn snitch my.server.ru    # rtt vs geo (methodika §10.1)
 byebyevpn trace my.server.ru     # icmp hop-count
 byebyevpn local                  # scan this machine
-byebyevpn audit-config cfg.json  # predict a config's detectability (v2.8.0)
+byebyevpn audit-config cfg.json  # identify configured protocols and audit settings
 byebyevpn sweep 1.2.3.0/24       # cluster a subnet by TLS fingerprint (v2.8.0)
+byebyevpn names sub.mysite.ru    # does the NAME give you away? offline, no packets
 ```
+
+Every command that sends packets to a target (`scan`, `ports`, `udp`,
+`tls`, `j3`, `grpc`, `snitch`, `trace`, `dpi`) runs the preflight first and
+exits 5 without sending anything when it fails.
+
+### Interactive panel
+
+Run `byebyevpn` with no arguments (or double-click it) for a full-screen
+panel:
+
+```
+  ● byebyevpn v3.0.0   your node through a DPI box's eyes
+ machine  ● direct via Ethernet   public targets pass preflight
+╭─ menu ──────────────────────╮╭─ SCAN ─────────────────────────────────────────╮
+│ SCAN                        ││ Full scan                                      │
+│ ▸ Full scan                 ││ Preflight, TCP ports, path check, UDP, TLS,    │
+│   Quick scan (205 ports)    ││ junk probes, verdict. ...                      │
+│   DPI path test (SNI)       ││                                                │
+│ PROBES                      ││ sends: Preflight, then every probe ...         │
+│   TCP ports                 ││ settings  (S to change)                        │
+│   ...                       ││ ports all 65535   timeout 800 ms   ...         │
+│                             ││ last full scan                                 │
+│                             ││  CLEAN   100/100   tier PASS / ALLOW           │
+╰─────────────────────────────╯╰────────────────────────────────────────────────╯
+ ↑↓ move   ←→ section   Enter run   S settings   L last scan   R refresh   Q quit
+```
+
+- the status bar shows, without sending anything, whether public traffic
+  from this machine leaves through a tunnel, and whether proxy clients,
+  packet rewriters or a system proxy are active;
+- each item says what it does and **what it sends**, before you run it;
+- Settings (`S`): port range (all, 205 curated, custom list), timeout,
+  threads, stealth, passive, GeoIP and CT lookups, junk probes per port,
+  saving each run to `<target>.md`, preflight override;
+- a run leaves the panel so the full output scrolls normally, then shows a
+  result card; the panel keeps the last verdict and the target history
+  (memory only, nothing is written to disk unless saving is on).
+
+Every action calls the same code as the command line, so the panel sends
+exactly the same probes. Without a console (pipe, redirect) the program
+falls back to a prompt that takes command lines such as `scan 1.2.3.4`.
+
+### Hostname markers (`names` and full scans)
+
+```bash
+byebyevpn names sub.example.com vless-de1.example.com
+byebyevpn names wg01.example.com us8360.nordvpn.com --json
+```
+
+This offline check finds protocol, panel and subscription naming conventions.
+It accepts ASCII hostnames and Punycode (`xn--`), validates label boundaries,
+and uses a bundled Public Suffix List, including private hosting suffixes.
+Generic words match whole components: `sub2` matches, `subaru` does not.
+Distinctive names such as `amneziawg` also match within combined labels.
+
+`strong`, `moderate` and `weak` describe a naming association, not measured
+accuracy or proof of a running protocol. **No hostname finding changes the
+full scan score or TSPU verdict.** Certificate names may describe another
+service; the report retains each source (`target`, `cert_cn:port`, `cert_san:port`).
+
+Provider-domain and node-pattern rules cover selected Mullvad, IVPN, NordVPN
+and Cloudflare WARP names. A provider's website is not necessarily a VPN endpoint.
+`workers.dev` is reported as shared application hosting, not VPN evidence.
+The command does not resolve names, enumerate subdomains or query CT logs.
+
+Exit codes: **3** strong naming hints, **2** moderate, **0** weak/none/IP input,
+**64** invalid input. Exit 0 does not certify a clean server. Invalid names
+have explicit errors in JSON; mixed inputs are all reported and exit 64.
+See [matching rules, sources and limitations](docs/HOSTNAME_ANALYSIS.md).
 
 A completed full scan exits with the verdict tier so wrapper scripts
 can branch without parsing output (v2.6.0):
@@ -247,44 +461,96 @@ can branch without parsing output (v2.6.0):
 ```
 0  CLEAN (score >= 85)        2  SUSPICIOUS (50-69)
 1  NOISY (70-84)              3  OBVIOUSLY-VPN (< 50)
+4  INCONCLUSIVE (no verdict)  5  UNRELIABLE (preflight failed)
 64 usage error (no target)
 ```
+
+`dpi` runs the same preflight and exits 5 when it fails. `ech` exits 4
+when the DoH lookup itself failed; "no HTTPS RR" (exit 1) is printed only
+when a resolver answered NOERROR without one.
+
+#### Client-side checks: `dpi` and `dpi --volume`
+
+Run these from your ordinary connection against your own node. They
+measure the path between this machine and that host at this moment; the
+result does not carry over to another connection, operator or day, and
+every result says so.
+
+- `dpi <host> [port]`: SNI reset or silent drop on the first flight. Prints
+  `SNI check: positive / negative / inconclusive / not applicable`, exit
+  codes as before, `--json` for scripts.
+- `dpi <host> [port] --volume /path --control host[:port]/path`: the 16-20 KB
+  freeze field reports describe (F7). The tool downloads `/path` from your
+  node over TLS (the path must serve 64 KB or more) and the control path
+  from a host you know carries volume, control before and after. Positive
+  means bytes stopped on an open connection for 8 s in two transfers at the
+  same offset while the control carried 64 KB or more; the text says
+  whether the offset lies in the 16-20 KB band. No control, a failing
+  control, stalls at different offsets, or a connection closed by FIN or
+  RST give inconclusive; a resource under 64 KB gives not applicable. Exit
+  0 carried, 2 stalled, 4 inconclusive or not applicable. The request is
+  `GET` with Host, Accept and Connection, the same header set as the HTTPS
+  probe.
 
 Hostnames are resolved via `getaddrinfo`; IPv4 is always preferred,
 and the chosen IP is printed in phase [1/8]. On IPv4-only links (RU /
 CIS consumer internet) this avoids the happy-eyeballs AAAA trap where
 an unreachable v6 silently burns every timeout.
 
-### Config audit (pre-deploy, v2.8.0)
+### AmneziaWG entropy/sequence analysis (PCAP/PCAPNG)
 
-`byebyevpn audit-config <file>` runs the verdict engine's signal logic
-**statically against an Xray (v2ray-core) or sing-box JSON config** —
-before you deploy it, with no network and no target. It reuses the same
-brand→ASN table the live scanner uses, so the checks line up one-to-one
-with what a real scan would later find on the wire:
-
-- Reality `dest=` / sing-box `handshake.server` pointing at a major brand
-  (amazon/apple/microsoft/google/cloudflare/yandex/…) — the cert-on-non-
-  owning-ASN tell. **HIGH.**
-- named-protocol defaults: Shadowsocks on :8388/:8488, WireGuard on
-  :51820, Hysteria2 / TUIC inbounds — the A-tier instant-block signatures.
-- plaintext inbounds (`security: none`, ws/grpc without TLS).
-- missing `fallbacks` (the silent-on-junk pattern J3 probes for),
-  `show: true` debug leak, empty/missing Reality `shortIds`, VLESS without
-  `xtls-rprx-vision` flow, and the 3x-ui/x-ui/Marzban panel-port cluster.
-
-Output is a per-finding list (severity + what + how-to-fix) and a
-**predicted TSPU verdict** (`PASS / THROTTLE / BLOCK / IMMEDIATE BLOCK`)
-using the same A/B tiering as a live scan. Exit code mirrors the scan
-tiers: `0 PASS, 1 THROTTLE, 2 BLOCK, 3 IMMEDIATE BLOCK, 64` on a file /
-parse error — so a deploy script can gate on it:
-
-```bash
-byebyevpn audit-config /etc/xray/config.json || { echo "fix the config first"; exit 1; }
+```powershell
+byebyevpn awg-entropy connection.pcapng --json
 ```
 
-The advisor is fully offline and emits nothing on the wire; it only reads
-the JSON file you hand it.
+Offline analysis of the **outer UDP traffic of an actual connection**. Reports
+per-flow byte/nibble entropy and repeated variable-size packet trains followed
+by bidirectional traffic. Designed with the examined AWG 2.x, 3.0 and latest
+3.1 sources in mind; does not rely on fixed headers, handshake sizes or timers.
+
+`AWG_COMPATIBLE_HEURISTIC` is a compatibility hint, **not protocol proof**.
+Entropy cannot determine the AWG version. Ordinary encrypted UDP can also
+match, and a missing pattern does not exclude AWG. This command does not change
+the live scan score. Exit 0 means analysis completed; 64 is an input error.
+
+See [source research, thresholds, capture requirements and limitations](docs/AMNEZIAWG_ANALYSIS.md).
+
+### Config audit
+
+```powershell
+byebyevpn audit-config server.json
+byebyevpn audit-config server.json --json
+```
+
+Reads an Xray, sing-box or WireGuard/AmneziaWG configuration offline. The Xray
+report identifies configured protocols, transports and Vision users, and checks
+selected compatibility and exposure issues. It supports both the current
+`method`/`users` fields and legacy `network`/`clients` aliases.
+
+Removed XTLS, legacy HTTP/QUIC transports, invalid Vision flows, old VMess and
+Shadowsocks settings, REALITY short IDs and proxy authentication are covered.
+Both cores: two listeners on one port and socket layer (TCP and UDP may
+share a number), a TLS version range with nothing left in it, and a control
+API on a public address (Xray `api`, sing-box Clash or V2Ray API). Xray only:
+duplicate inbound tags and duplicate user emails, which stop the core.
+sing-box gets the REALITY short ID and handshake-server checks Xray already
+had, and REALITY with `tls.enabled` off is now reported as plaintext: before,
+the brand rule fired on a handshake server sing-box never used.
+
+Findings that do not change what an observer sees print in a separate
+**Hygiene** block and never move the tier: settings for another transport
+or security mode that the core ignores, two users with one id or password,
+debug logging, REALITY `show`.
+Compatibility errors exit with **65** and don't count as network signatures.
+File/parse errors exit with **64**; **0-3** retain the legacy exposure tiers.
+The file size limit is 16 MiB.
+
+Results come from configuration only. Keys, certificate files, routing and
+firewalls are not validated; no remote connection is made. Default ports,
+entropy and TLS negotiation differences do not confirm Xray or Vision.
+The legacy `tspu_tier` field is an unvalidated heuristic, not a measured block.
+
+See [Xray source research, checks and limits](docs/XRAY_AUDIT.md).
 
 ### Port scan modes
 
@@ -303,6 +569,9 @@ the JSON file you hand it.
 --udp-to MS       UDP recv timeout            (default 900)
 --no-color        disable ANSI colors
 -v / --verbose    verbose output
+--expect-ip A     preflight: the external address lookup services must see
+--i-know-what-i-am-doing
+                  scan despite a failed preflight; verdict marked overridden
 ```
 
 ### Stealth / privacy
@@ -328,7 +597,7 @@ All default off. Default scan emits the same bytes v2.6.0 emitted.
 Anti-fingerprint context: v2.7.0 randomizes the J3 probe order with a
 CSPRNG-backed Fisher-Yates per scan, so the fixed `empty -> GET ->
 CONNECT -> SSH -> rand -> tls-invalid -> abs-URI -> 0xff` sequence is
-no longer on the wire. The Chrome 131 ClientHello randomness also moved
+no longer on the wire. The synthetic ClientHello randomness also moved
 to `RAND_bytes` (away from `std::mt19937`).
 
 ### Save scan output
@@ -362,25 +631,30 @@ release's notes for verification.
 ### Limitations
 
 - Connect-scan, not SYN-scan. Full TCP handshake seen by the target.
-- Cloudflare WARP / CGNAT / corporate proxies can ACK every port
-  with identical RTT. The tool detects this (>60 ports with RTT
-  variance <80ms) and warns.
-- The uTLS dual-probe sends a byte-accurate Chrome 131 ClientHello
-  (so a strict uTLS-enforcing Reality server accepts it) but the
+- Cloudflare WARP / CGNAT / corporate proxies / local TUN clients can
+  ACK every port. Preflight tests the local side with `192.0.2.1`; after
+  the scan, 3 random dynamic-range ports must refuse. Two accepted ports
+  (or one plus >60 open ports with RTT spread <80 ms) void the verdict.
+- The uTLS dual-probe sends a synthetic Chrome-style ClientHello that
+  is not byte-identical to any current Chrome (see above). The
   raw-socket path does not run the TLS 1.3 key schedule, so it has
   no peer cert for the Chrome side - cert-steering detection still
-  relies on the openssl-side handshake. The main `tls_probe` JA3 is
-  still OpenSSL-default; this is noted in the output as an advisory.
+  relies on the openssl-side handshake. The main `tls_probe` hello is
+  the OpenSSL default.
 - QUIC probes (v2.8.0) send a real RFC 9001 protected Initial - the
   Initial key schedule, AEAD payload protection and header protection
   are byte-exact against the RFC 9001 Appendix A test vectors, and a
   TLS ClientHello rides in a CRYPTO frame. a QUIC listener decrypts it
-  and answers. the ClientHello does not yet carry the
-  quic_transport_parameters extension, so the probe confirms a QUIC
-  endpoint and captures its response shape, but does not drive a full
-  QUIC handshake to completion.
-- GeoIP providers disagree; `ipapi.is` flags any hosting IP as
-  "VPN". Score is built on behaviour, not on single-source tags.
+  and answers. the ClientHello carries ALPN `h3` and the
+  quic_transport_parameters extension (0x39) with
+  initial_source_connection_id. the probe confirms a QUIC endpoint and
+  captures its response shape, but does not drive a full QUIC handshake
+  to completion.
+- GeoIP providers disagree and share upstream feeds. Their VPN, proxy
+  and Tor tags are printed for reference and never move the score.
+- An active scan cannot see what the classifier sees passively (address
+  lists, SNI policy, first-packet heuristics, the volume freeze). See
+  [docs/COVERAGE.md](docs/COVERAGE.md).
 
 ### License
 
@@ -406,40 +680,44 @@ score детектируемости, определённый стек, и ре
 
 ### Подготовка (читай до запуска)
 
-> **Перед запуском диагностики выключи на хосте любой активный
-> VPN / Zapret / GoodbyeDPI / прокси.** сканер использует TCP/IP и
-> TLS стек хоста чтобы слать пробы. если хост ходит через
-> TUN / sing-box / Zapret-фрагментатор / Proxifier, на проводе ты
-> измеришь не цель, а **отражение собственного локального стека**:
+> **Перед запуском выключи на хосте любой активный VPN / Zapret /
+> GoodbyeDPI / прокси.** Теперь сканер проверяет это сам (preflight,
+> шаг 1b) и отказывается выдавать вердикт, если его собственный стек
+> скомпрометирован:
 >
-> - latency-якоря и RTT поедут, SNITCH сломается.
-> - байты ClientHello могут перезаписаться Zapret-style фрагментатором,
->   JA4 посчитается криво.
-> - GeoIP-запросы вернут твой exit-IP вместо нужного lookup'а.
-> - режим `local` (`byebyevpn local`) - единственное исключение, там
->   как раз надо смотреть свои адаптеры. но даже в нём для скана
->   удалённой цели VPN на хосте нужно отключить.
+> | что нашёл preflight | что будет |
+> |---|---|
+> | маршрут до цели идёт через туннельный адаптер (Wintun, WireGuard, TAP, sing-tun, PPP) | **стоп**: ни одной пробы, метка `UNRELIABLE`, код 5 |
+> | TCP-connect на `192.0.2.1` (RFC 5737, никуда не маршрутизируется) прошёл на маршруте цели | **стоп**: локальный стек принимает любой SYN, все «открытые порты» фальшивые |
+> | запущен zapret (winws), GoodbyeDPI или clumsy | **стоп**: пакеты переписываются на лету |
+> | цель резолвится в fake-IP или CGNAT | **стоп** |
+> | задан `--expect-ip A`, а сервисы видят другой адрес | **стоп** |
+> | туннель поднят, но маршрут до цели прямой | предупреждение: GeoIP, CT и RTT-якоря могут идти через туннель |
+> | запущены прокси-клиенты, задан системный прокси или `HTTP(S)_PROXY` | предупреждение |
+> | ipify, icanhazip и ifconfig.me видят разные адреса | предупреждение: выход зависит от назначения |
 >
-> алгоритм: вырубить VPN/прокси, прогнать скан, потом включить
-> обратно. на Windows: убить процесс v2rayN/sing-box/Zapret и
-> убедиться через `Get-NetAdapter` что нет активных
-> TUN/WireGuard/Wintun/TAP интерфейсов.
+> `--i-know-what-i-am-doing` сканирует всё равно, вердикт помечается как
+> overridden в отчёте и в JSON. Проверка внешнего адреса выключается
+> `--no-geoip` / `--stealth`. Режим `local` (`byebyevpn local`) как раз
+> для просмотра своих адаптеров.
 
 ### Пайплайн
 
 | # | Модуль                          | Что делает                                                            |
 |---|---------------------------------|-----------------------------------------------------------------------|
 | 1  | DNS resolve                      | A + AAAA, приоритет IPv4                                              |
-| 2  | GeoIP aggregation                | 5 HTTPS-only провайдеров параллельно, ASN + флаги                     |
-| 3a | TCP port scan                    | Connect-scan 1-65535 (дефолт) или 205 curated, 500 потоков            |
-| 3b | TCP stack fingerprint            | Распределение handshake-времени + SIO_TCP_INFO peer window/MSS + поведение на закрытом порту, без админа |
-| 4  | UDP probes                       | Handshake'и WireGuard / AmneziaWG / Hysteria2                          |
-| 4b | AmneziaWG S1 deep-probe (v2.6.0) | Sweep размера junk-prefix на :51820, восстанавливает настроенный S1    |
+| 1b | Preflight                        | Туннель на маршруте до цели, локальный ack-all, переписчики пакетов, прокси, внешний адрес; без вердикта, если скомпрометирован сам сканер |
+| 2  | GeoIP aggregation                | 5 HTTPS-only провайдеров параллельно, ASN + флаги; справочно, в score не входит |
+| 3a | TCP port scan                    | Connect-scan 1-65535 (дефолт) или 205 curated, 500 потоков; без повтора SYN, закрытый порт читается как refused, а не timeout |
+| 3a | Проверка канала + контроль ack-all | 10 connect'ов на первый открытый порт (потери, RTT); 3 случайных порта из 49152-65535 обязаны отказать |
+| 3b | TCP stack fingerprint            | Распределение handshake-времени + SIO_TCP_INFO peer window/MSS + ответ закрытого порта, без админа; справочно, ОС не угадывается |
+| 4  | UDP probes                       | WireGuard / AmneziaWG / QUIC: ответ сверяется с реальным layout'ом ответа протокола |
+| 4b | AmneziaWG S1 deep-probe (v2.6.0) | Sweep размера junk-prefix на :51820, не подтверждает AWG или S1    |
 | 5  | Service fingerprint + CT         | SSH, HTTP, TLS + SNI consistency, SOCKS5, CONNECT, Shadowsocks, crt.sh, proxy-headers |
-| 5b | uTLS dual-probe + JA4 + JA4S     | По два ClientHello на TLS-порт (байт-в-байт Chrome 131 vs openssl-default), JA4 / JA4S из захваченных байт CH/SH, JA4S классифицируется по таблице стеков |
-| 6  | J3 / ТСПУ active probing         | 8 probe'ов на каждый TLS-порт (Reality discriminator)                 |
+| 5b | uTLS dual-probe + JA4 + JA4S     | По два ClientHello на TLS-порт (синтетический hello в стиле Chrome vs openssl-default), JA4 / JA4S из захваченных байт CH/SH, JA4S классифицируется по таблице стеков |
+| 6  | J3 / ТСПУ active probing         | 8 probe'ов на каждый TLS-порт; для каждого reply / closed / reset / held open, справочно |
 | 7  | SNITCH + traceroute + SSTP       | RTT vs GeoIP (§10.1), ICMP hop-count, Microsoft SSTP                  |
-| 8  | Verdict + эмуляция ТСПУ          | Score 0-100, определение стека, 3-tier вердикт ТСПУ, hardening        |
+| 8  | Вердикт                          | Проверки с паспортами, покрытие, score 0-100 или INCONCLUSIVE / UNRELIABLE с причинами, слепые зоны |
 
 ### UDP handshake'и
 
@@ -454,9 +732,10 @@ v2.6.0 сузил UDP-набор до современных signature-less ту
 | 51820     | WireGuard          | 148-байтный MessageInitiation, рандомное тело        |
 | 51820     | AmneziaWG Sx=8     | Двойная проба: vanilla WG отвергается, Sx=8 принят   |
 | 55555     | AmneziaWG Sx=8     | 8-байт junk-prefix + WG init                         |
-| 51820     | AmneziaWG S1 sweep | Sweep из 12 размеров junk-prefix, восстанавливает S1 |
+| 51820     | AmneziaWG S1 sweep | Sweep из 12 размеров junk-prefix, не подтверждает AWG или S1 |
 | 36712     | Hysteria2          | QUIC v1 Initial, рандомный DCID                      |
 | 443       | Hysteria2          | QUIC v1 Initial на :443                              |
+| 51820 или `--wg-port` | WireGuard keyed | полный MessageInitiation от ключа пира владельца; только с `--wg-pubkey` и `--wg-key` |
 
 ### J3 probe'ы
 
@@ -471,26 +750,104 @@ v2.6.0 сузил UDP-набор до современных signature-less ту
 7. HTTP absolute-URI (proxy-style)
 8. `0xFF × 128`
 
-Reality / XTLS молча дропает все 8; обычный HTTP-сервер отвечает
-400/403. Сам паттерн и есть сигнал.
+Каждая проба заканчивается одним из исходов: ответ, закрыто сервером (FIN),
+сброс (RST), нет ответа при открытом соединении, нет соединения. Раньше все
+неответы печатались как `SILENT (dropped)`, а шесть таких на обычном
+nginx-подобном сайте давали «silent-on-junk (TLS-only / Reality-hidden)».
+Счётчики читаются, только если на том же порту прошёл нормальный TLS- или
+HTTP-обмен (контроль); на канале с потерями молчание уликой не считается.
+J3 справочный: в score не входит и никакой протокол не определяет.
+
+Для WireGuard ответ засчитывается, только если его receiver index равен
+sender index нашей пробы; ответ вызывает ещё две пробы, нужны два
+согласных. Настоящие WireGuard и AmneziaWG без ключей не отвечают никогда,
+это печатается как «не измерено». QUIC-ответ это заметка и в score не
+входит ни на каком порту.
+
+#### Self-check WireGuard своими ключами
+
+```
+byebyevpn scan <своя-нода> --wg-pubkey server.pub --wg-key peer.key [--wg-psk peer.psk] [--wg-port 51820]
+```
+
+Сервер WireGuard без ключей не отвечает никому: mac1 считается от
+публичного ключа сервера, а после mac1 сервер расшифровывает статический
+ключ инициатора и молча отбрасывает неизвестного пира. Поэтому нужны
+публичный ключ сервера **и** приватный ключ пира, который на этом сервере
+настроен, оба из твоих конфигов. С ними сканер шлёт обычный 148-байтный
+initiation (свежий эфемерный ключ, TAI64N с тем же округлением, что у
+wireguard-go) и проверяет ответ криптографически: ответ с верным mac1 может
+прислать только владелец приватного ключа сервера. Два согласных ответа с
+интервалом 1-1.5 с дают `wg-keyed` positive (tier A, -15, вместе с
+`wg-family` считается один раз). Тишина это inconclusive: неверный ключ,
+фильтр и отсутствие слушателя неотличимы. Несовпадающий preshared key
+печатается отдельно и всё равно засчитывается, mac1 уже доказал сервер.
+
+- публичный ключ можно текстом или файлом, приватный и preshared только
+  файлом, чтобы они не попадали в список процессов;
+- ключи не печатаются и не пишутся в JSON (`wg_self_check`: `requested`,
+  `ran`, `port`);
+- сервер переносит endpoint этого пира на эту машину, пока его собственный
+  клиент снова не отправит трафик: для проверки заведи отдельного пира;
+- измеряется путь от этой машины до ноды в этот момент. AmneziaWG с junk
+  или своими заголовками обычный initiation отбрасывает (inconclusive, а не
+  «скрыт»).
+
+Ограничения анализа сертификатов, HTTPS и crt.sh описаны в
+[TLS/HTTP observations](docs/WEB_OBSERVATIONS.md). Короткий срок сертификата,
+отсутствие `Server` и пустой результат поиска в CT не снижают score.
 
 ### Шкала verdict
 
 | Score  | Label           | Смысл                                                  |
 |--------|-----------------|--------------------------------------------------------|
-| 85-100 | `CLEAN`         | Выглядит как обычный веб-сервер                        |
-| 70-84  | `NOISY`         | Подозрительные артефакты, не обязательно VPN           |
-| 50-69  | `SUSPICIOUS`    | Несколько красных флагов                               |
-| < 50   | `OBVIOUSLY VPN` | Палится сразу - нужна обфускация / смена стека         |
+| 85-100 | `CLEAN`         | Мало или нет учитываемых признаков |
+| 70-84  | `NOISY`         | Совпала часть учитываемых признаков |
+| 50-69  | `SUSPICIOUS`    | Совпало больше учитываемых признаков |
+| < 50   | `OBVIOUSLY VPN` | Много признаков или признаки с большим весом |
+
+| -      | `INCONCLUSIVE`  | Скан не состоялся так, чтобы на нём строить вердикт; причины перечислены |
+| -      | `UNRELIABLE`    | Preflight не прошёл; результаты описывают эту машину, а не цель |
+
+Это прежние названия эвристических категорий, не подтверждение протокола и не
+вероятность детекта. `CLEAN` значит «ни одна именованная сигнатура не
+ответила», а не «DPI эту ноду не видит»: каждый отчёт перечисляет, чего пробы
+не видят (Reality с рабочим target, Shadowsocks AEAD/2022, WireGuard без
+ключей владельца, AmneziaWG, Trojan или VLESS за настоящим сайтом).
+
+Score двигают только четыре сигнала, у каждого паспорт в
+[docs/SIGNALS.md](docs/SIGNALS.md): `wg-family` (-15), `wg-keyed` (-15,
+self-check владельца, вместе с `wg-family` считается один раз), `sstp`
+(-18), `socks5` (-20), все tier A. Каждая проверка заканчивается как positive,
+negative, inconclusive или not applicable; score двигает только positive, и
+для него нужны два согласных наблюдения из не более чем трёх. GeoIP-теги,
+J3, данные TCP-стека, JA4S и RTT справочные.
+
+Вердикта нет, если: не прошёл preflight; 2 из 3 случайных контрольных портов
+приняли соединение (ack-all); проверка канала потеряла 50% и больше; больше
+половины применимых проверок inconclusive; скан прерван; ни один сервис не
+ответил так, чтобы это можно было атрибутировать. Матрица ошибок по стендам с
+известной истиной: [docs/GROUNDTRUTH.md](docs/GROUNDTRUTH.md),
+[docs/CALIBRATION.md](docs/CALIBRATION.md).
+
+Любое совпадение группы A ниже ограничивает score значением 69, то есть метка
+не лучше `SUSPICIOUS`, код выхода не меньше 2. Раньше один ответ в форме
+WireGuard давал `CLEAN 85` рядом с `IMMEDIATE BLOCK`.
 
 ### Вердикт ТСПУ
 
 | Tier | Вердикт          | Что это значит                                          |
 |------|------------------|---------------------------------------------------------|
-| A≥1  | `IMMEDIATE BLOCK`| Named-протокол - SYN/handshake дропается                |
-| B≥2  | `BLOCK` (cumul.) | ≥2 soft-аномалии - классификатор пересекает порог       |
-| B=1  | `THROTTLE / QoS` | 1 soft-аномалия - флаг на мониторинг / rate-limit       |
-| 0    | `PASS / ALLOW`   | Нет сигнатур                                            |
+| A≥1  | `IMMEDIATE BLOCK`| Совпало хотя бы одно правило прежней группы A |
+| B≥2  | `BLOCK` (cumul.) | Совпало хотя бы два правила прежней группы B |
+| B=1  | `THROTTLE / QoS` | Совпало одно правило прежней группы B |
+| 0    | `PASS / ALLOW`   | Правила этой модели не сработали |
+
+Модель не воспроизводит проверенный классификатор оператора. Названия сохранены
+для совместимости и не доказывают блокировку, замедление или пропуск трафика.
+В JSON поля `thresholds_validated` и `blocking_verified` равны `false`. Сейчас
+ни один сигнал не относится к группе B, две средние строки не возникают; почему
+у коробки нет накопительного tier, см. [docs/TSPU-MODEL.md](docs/TSPU-MODEL.md).
 
 ### Как тулза выглядит на проводе
 
@@ -498,22 +855,31 @@ Reality / XTLS молча дропает все 8; обычный HTTP-серв�
 IP-intel сервисам, к target при HTTP-over-TLS аудите, к crt.sh)
 уходит **без** tool-specific заголовков.
 
-Для `http_get()` - функция которая ходит в IP-intel и crt.sh -
-запрос побайтово выглядит так:
+Для `http_get()` - функция которая ходит в IP-intel, crt.sh и в DoH
+команды `ech` - запрос побайтово (снят на loopback) выглядит так:
 
 ```
 GET /path HTTP/1.1
+Connection: Keep-Alive
 Host: <host>
 ```
 
-Никаких `User-Agent`, `Accept`, `Accept-Language`, `Accept-Encoding`,
-`Sec-Fetch-*`, `Upgrade-Insecure-Requests`. Эти endpoint'ы принимают
-голый GET - так же как работает `curl -sS https://ipwho.is/8.8.8.8`
-без дополнительных флагов. WinHTTP всё равно прозрачно распакует
-gzip если сервер выберет его сам, но мы не анонсируем поддержку.
+`Connection: Keep-Alive` добавляет сам WinHTTP. Резервный DoH Cloudflare
+в `ech` добавляет `Accept: application/dns-json`, больше ничего. Никаких
+`User-Agent`, `Accept-Language`, `Accept-Encoding`, `Sec-Fetch-*`,
+`Upgrade-Insecure-Requests`. Сборки до этого исправления ещё слали
+`Accept-Encoding: gzip, deflate`. Сжатый ответ теперь отвергается, а не
+распаковывается.
 
 Для `https_probe()` - аудит target'а через HTTP-over-TLS - хедеры
 тоже минимальные (`Host`, `Accept: */*`, `Connection: close`).
+`dpi --volume` шлёт те же три заголовка на ноду и на контрольный хост.
+
+Self-check WireGuard (`--wg-pubkey`, `--wg-key`) шлёт полный 148-байтный
+initiation, собранный как у настоящего клиента: эфемерный ключ и sender
+index из RAND_bytes, TAI64N с обнулёнными младшими 24 битами наносекунд,
+как у wireguard-go и модуля Linux, mac2 нулевой. До трёх штук с
+интервалом 1-1.5 с.
 
 Предыдущие версии (v2.5 - v2.5.4) отправляли блок заголовков "как
 Chrome 131", чтобы "выглядеть как браузер". Это само по себе было
@@ -526,33 +892,65 @@ OpenSSL `RAND_bytes`: тело WireGuard MessageInitiation, junk-prefix +
 WG-тело AmneziaWG, Hysteria2 QUIC DCID, TLS ClientRandom, префикс
 invalid-SNI.
 
-ICMP traceroute шлёт стандартный Windows `ping.exe` payload
-(`abcdefghi...`, 32 байта) - байт-в-байт то же, что и любой
-Windows-клиент.
+ICMP traceroute шлёт payload Windows `ping.exe`
+(`abcdefghijklmnopqrstuvwabcdefghi`, 32 байта). Сборки до этого
+исправления слали 33 байта (в сеть уходил завершающий ноль C-строки),
+такого не шлёт ни одна утилита Windows.
+
+uTLS dual-probe (v2.6.0) шлёт два разных ClientHello на TLS-порт.
+Сторона "chrome" это синтетический hello, собранный вручную
+(`src/scan/chrome_ch.cpp`): набор расширений Chrome до X25519MLKEM768,
+GREASE на позициях из спеки, x25519 key_share с GREASE-префиксом,
+padding. Его JA4 `t13d1516h2_8daaf6152771_e5627efa2ab1`, это пример из
+спеки FoxIO. Текущий Chrome шлёт другое: порядок расширений у нас
+фиксирован (Chrome перемешивает его на каждое соединение), нет
+X25519MLKEM768 и нет ECH GREASE. Это отдельный отпечаток, а не трафик
+браузера. Сторона "openssl" это дефолтный ClientHello OpenSSL, как в
+`tls_probe`. Байты CH/SH не покидают процесс, JA4 / JA4S считаются
+локально.
+
+Служебный трафик для проверки самого измерения: preflight шлёт один SYN
+на `192.0.2.1` на случайный порт (только если цель идёт тем же маршрутом)
+и, если не задан `--no-geoip`, по одному GET на `api.ipify.org`,
+`icanhazip.com` и `ifconfig.me/ip` через `http_get()`. После скана портов:
+10 connect'ов на первый открытый порт (проверка канала) и по одному
+connect'у на 3 случайных порта из 49152-65535 (контроль ack-all).
+SOCKS5-приветствие и SSTP-запрос повторяются до двух согласных ответов
+(не больше трёх); проба WireGuard или AmneziaWG, получившая ответ,
+отправляется ещё дважды. Все connect'ы идут без повтора SYN
+(`SIO_TCP_INITIAL_RTO`).
+
+TLS-клиенты больше не кладут IP-адрес в SNI (RFC 6066, раздел 3): при
+цели-адресе OpenSSL-пробы идут без SNI, синтетический hello в стиле Chrome
+не содержит `server_name` (JA4 начинается с `t13i`), а SSTP-запрос берёт
+имя хоста или идёт без SNI, со случайным GUID вместо `{00000000-...}`.
 
 ### Аудит
 
-Грепнуть исходник на tool-identifying строки. Ожидаются только три
-совпадения, ни одно из которых не уходит в сеть:
+Грепнуть модульное дерево исходников на tool-identifying строки.
+Ожидается одно совпадение, `--help` printf в `src/app/cli.cpp`, лимит 3
+оставлен как запас. В сеть оно не уходит:
 
 ```
-$ grep -nE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' src/byebyevpn.cpp
-1:     // ByeByeVPN - full VPN / proxy / Reality detectability analyzer
-...    // коммент в http_get про scrub
-...    // printf в --help
+$ grep -rnE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' \
+    src --include='*.cpp' --include='*.h'
+src/app/cli.cpp:131:    printf("ByeByeVPN - full TSPU/DPI/VPN ...
 ```
 
-CI workflow (`.github/workflows/release.yml`) проваливает сборку при
-любом дополнительном совпадении.
+CI workflow (`.github/workflows/release.yml`) проваливает сборку, если
+совпадений больше трёх.
 
 ### Установка
 
-Windows: скачать `byebyevpn-v2.8.3-win64.zip` со страницы
+Windows: скачать `byebyevpn-v3.0.0-win64.zip` со страницы
 [Releases](../../releases), распаковать, запустить `byebyevpn.exe`
-(двойной клик = интерактивное меню, либо IP/hostname из терминала).
+(двойной клик = интерактивная панель, либо IP/hostname из терминала).
 
 Требования: Windows 10 1803+ / 11 / Server 2019+. Прав администратора
-не нужно. DLL не нужно. Интернет - для GeoIP и CT-log.
+не нужно. DLL не нужно. Интернет нужен для GeoIP, CT-log, проверки
+внешнего адреса в preflight и DoH-запроса `ech`; всё это отключается
+(`--no-geoip`, `--no-ct`, `--stealth`). Панели нужна консоль с VT
+(Windows Terminal или conhost на Windows 10+).
 
 Linux / macOS: через Wine. Всё кроме `local` (адаптеры хоста)
 работает идентично.
@@ -565,7 +963,7 @@ CycloneDX-SBOM (`byebyevpn-sbom.json`) и - когда выставлен клю
 ### CLI
 
 ```bash
-byebyevpn                        # интерактивное меню
+byebyevpn                        # интерактивная панель
 byebyevpn <host>                 # полный скан
 byebyevpn scan 1.2.3.4           # то же, явно
 byebyevpn <host> --json          # полный скан, JSON в stdout (v2.6.0)
@@ -577,9 +975,74 @@ byebyevpn geoip 8.8.8.8          # GeoIP
 byebyevpn snitch my.server.ru    # RTT vs geo (§10.1)
 byebyevpn trace my.server.ru     # ICMP hop-count
 byebyevpn local                  # сканировать свою машину
-byebyevpn audit-config cfg.json  # детектируемость конфига до деплоя (v2.8.0)
+byebyevpn audit-config cfg.json  # протоколы, Vision и ошибки настроек; без сетевых запросов
 byebyevpn sweep 1.2.3.0/24       # кластеризация подсети по TLS-отпечатку (v2.8.0)
+byebyevpn names sub.mysite.ru    # признаки в имени, офлайн
 ```
+
+`audit-config` для обоих ядер ловит два listener'а на одном порту и слое
+(TCP и UDP могут делить номер), диапазон версий TLS, в котором ничего не
+осталось, и управляющий API на публичном адресе (Xray `api`, Clash/V2Ray API
+sing-box); только для Xray: повтор тега inbound и email пользователя, с
+которыми ядро не стартует. sing-box получил проверки short ID и handshake
+server, которые были у Xray; REALITY при выключенном `tls.enabled` теперь
+печатается как plaintext. То, что не меняет картину для наблюдателя
+(настройки чужого транспорта, которые ядро игнорирует, два пользователя с
+одним id, debug-лог, REALITY `show`), выводится отдельным блоком
+**Hygiene** и на tier не влияет.
+
+Каждая команда, которая шлёт пакеты на цель (`scan`, `ports`, `udp`, `tls`,
+`j3`, `grpc`, `snitch`, `trace`, `dpi`), сначала делает preflight и при
+провале выходит с кодом 5, ничего не отправив.
+
+### Интерактивная панель
+
+`byebyevpn` без аргументов (или двойной клик) открывает панель на весь
+экран: слева меню по разделам, справа описание выбранного пункта, **что он
+отправит в сеть**, текущие настройки и карточка последнего скана.
+
+- строка состояния без единого пакета показывает, уходит ли публичный
+  трафик этой машины через туннель и запущены ли прокси-клиенты,
+  переписчики пакетов или системный прокси;
+- клавиши: стрелки вверх/вниз по пунктам, влево/вправо по разделам, Enter
+  запуск, `S` настройки, `L` последний скан, `R` обновить статус, `Q` выход;
+- настройки: диапазон портов (все, 205 отобранных, свой список), таймаут,
+  потоки, stealth, passive, GeoIP и CT, junk-пробы на порт, сохранение
+  каждого запуска в `<target>.md`, обход preflight;
+- запуск выходит из панели, чтобы вывод прокручивался как обычно, потом
+  показывает карточку результата. История целей хранится только в памяти.
+
+Панель вызывает тот же код, что и командная строка, пробы байт в байт те же.
+Без консоли (pipe, перенаправление) работает построчный режим: вводятся
+команды вида `scan 1.2.3.4`.
+
+### Признаки в именах (`names` и полный скан)
+
+```bash
+byebyevpn names sub.example.com vless-de1.example.com
+byebyevpn names wg01.example.com us8360.nordvpn.com --json
+```
+
+Офлайн-проверка ищет названия протоколов, панелей и подписочных сервисов.
+Поддерживаются ASCII-имена и Punycode (`xn--`); границы доменов определяются
+по встроенному Public Suffix List с частными зонами хостингов.
+`sub2` совпадает с `sub`, а `subaru` нет. Названия вроде `amneziawg` также
+ищутся внутри составных меток.
+
+Уровни `strong`, `moderate`, `weak` обозначают характер совпадения, а не
+измеренную точность. **Имя не подтверждает протокол и не меняет score или
+вердикт ТСПУ.** CN/SAN может принадлежать другому сервису. В отчёте остаются
+источники каждого имени: `target`, `cert_cn:порт`, `cert_san:порт`.
+
+Есть отдельные правила зон и имён узлов Mullvad, IVPN, NordVPN и Cloudflare WARP.
+Домен провайдера может быть сайтом или API. `workers.dev` отмечается как общий
+хостинг приложений, а не доказательство VPN. Команда не резолвит имена,
+не перебирает поддомены и не обращается к CT-логам.
+
+Коды выхода: **3** strong, **2** moderate, **0** weak/нет совпадений/IP,
+**64** некорректный ввод. Код 0 не означает, что сервер чистый. При смешанном
+вводе программа показывает все результаты и возвращает 64, если есть ошибка.
+[Правила, источники и ограничения](docs/HOSTNAME_ANALYSIS.md).
 
 Завершённый full scan выходит с кодом по уровню вердикта, чтобы
 обёртки могли ветвиться без парсинга вывода (v2.6.0):
@@ -587,8 +1050,35 @@ byebyevpn sweep 1.2.3.0/24       # кластеризация подсети п�
 ```
 0  CLEAN (score >= 85)        2  SUSPICIOUS (50-69)
 1  NOISY (70-84)              3  OBVIOUSLY-VPN (< 50)
+4  INCONCLUSIVE (без вердикта) 5  UNRELIABLE (preflight не прошёл)
 64 ошибка использования (нет цели)
 ```
+
+`dpi` делает тот же preflight и выходит с 5, если он не прошёл. `ech`
+выходит с 4, если не удался сам DoH-запрос; «no HTTPS RR» (код 1)
+печатается, только если резолвер ответил NOERROR без записи.
+
+#### Проверки со стороны клиента: `dpi` и `dpi --volume`
+
+Запускаются с обычного подключения против своей ноды. Измеряют путь между
+этой машиной и этим хостом в этот момент; на другое подключение, другого
+оператора и другой день результат не переносится, и каждый вывод это
+пишет.
+
+- `dpi <host> [port]`: сброс или тихий дроп по SNI на первом полёте.
+  Печатает `SNI check: positive / negative / inconclusive / not applicable`,
+  коды выхода прежние, `--json` для скриптов.
+- `dpi <host> [port] --volume /path --control host[:port]/path`: заморозка
+  на 16-20 КБ из полевых отчётов (F7). Тулза качает `/path` с твоей ноды по
+  TLS (путь должен отдавать от 64 КБ) и контрольный путь с хоста, который
+  заведомо передаёт объём, контроль до и после. Positive значит, что байты
+  перестали идти при открытом соединении на 8 с в двух передачах на одном
+  смещении, а контроль передал 64 КБ и больше; текст пишет, попало ли
+  смещение в полосу 16-20 КБ. Нет контроля, контроль не прошёл, остановки
+  на разных смещениях, соединение закрыто FIN или RST дают inconclusive;
+  ресурс меньше 64 КБ даёт not applicable. Выход 0 передал, 2 встал,
+  4 inconclusive или not applicable. Запрос `GET` с Host, Accept и
+  Connection, тот же набор заголовков, что у HTTPS-пробы.
 
 Hostname резолвится через `getaddrinfo`; IPv4 выбирается всегда, а
 выбранный IP печатается в фазе [1/8]. На IPv4-only каналах (РФ / СНГ)
@@ -612,6 +1102,9 @@ Hostname резолвится через `getaddrinfo`; IPv4 выбираетс�
 --udp-to MS       UDP recv timeout              (default 900)
 --no-color        без ANSI-цветов
 -v / --verbose    подробный вывод
+--expect-ip A     preflight: адрес, который должны видеть сервисы
+--i-know-what-i-am-doing
+                  сканировать несмотря на проваленный preflight; вердикт помечается overridden
 ```
 
 ### Stealth / приватность
@@ -637,7 +1130,7 @@ Hostname резолвится через `getaddrinfo`; IPv4 выбираетс�
 Анти-фингерпринт контекст: v2.7.0 рандомизирует порядок J3-проб через
 CSPRNG-Fisher-Yates per scan, фиксированной последовательности `empty
 -> GET -> CONNECT -> SSH -> rand -> tls-invalid -> abs-URI -> 0xff` на
-проводе больше нет. Рандом в Chrome 131 ClientHello тоже переехал на
+проводе больше нет. Рандом в синтетическом ClientHello тоже переехал на
 `RAND_bytes` (с `std::mt19937`).
 
 ### Сохранение результата в файл
@@ -671,25 +1164,30 @@ pinned msys2 образа. SHA256 exe и zip печатаются в release not
 ### Ограничения
 
 - Connect-scan, не SYN-scan. Target видит полный TCP handshake.
-- Cloudflare WARP / CGNAT / корпоративный proxy могут ACK'ать любой
-  порт с одинаковым RTT. Программа детектит это (>60 портов с
-  variance < 80 мс) и выводит warning.
-- uTLS dual-probe шлёт байт-в-байт точный Chrome 131 ClientHello
-  (поэтому Reality с жёстким uTLS-enforcement его примет), но
-  raw-socket путь не гоняет TLS 1.3 key schedule, так что для
+- Cloudflare WARP / CGNAT / корпоративный proxy / локальный TUN-клиент
+  могут ACK'ать любой порт. Preflight проверяет локальную сторону через
+  `192.0.2.1`; после скана 3 случайных порта из 49152-65535 обязаны
+  отказать. Два принятых (или один плюс >60 открытых портов с разбросом
+  RTT < 80 мс) аннулируют вердикт.
+- uTLS dual-probe шлёт синтетический ClientHello в стиле Chrome, он
+  не совпадает байт в байт ни с одним текущим Chrome (см. выше).
+  Raw-socket путь не гоняет TLS 1.3 key schedule, так что для
   Chrome-стороны нет сертификата peer'а - детект cert-steering
-  всё ещё опирается на openssl-handshake. JA3 основного `tls_probe`
-  по-прежнему OpenSSL-default, отмечено в выводе как advisory.
+  всё ещё опирается на openssl-handshake. Hello основного `tls_probe`
+  это дефолт OpenSSL.
 - QUIC-пробы (v2.8.0) шлют настоящий защищённый Initial по RFC 9001 -
   key schedule, AEAD-защита payload и header protection байт-в-байт
   совпадают с тест-векторами RFC 9001 Appendix A, а внутри CRYPTO-фрейма
   едет TLS ClientHello. QUIC-сервер расшифровывает его и отвечает. В
-  ClientHello пока нет расширения quic_transport_parameters, так что
-  проба подтверждает QUIC-эндпоинт и снимает форму ответа, но не
-  доводит полный QUIC-handshake до конца.
-- GeoIP-провайдеры часто несогласны друг с другом; `ipapi.is` метит
-  любой hosting-IP как VPN. Score построен на поведении, а не на
-  single-source флагах.
+  ClientHello есть ALPN `h3` и расширение quic_transport_parameters
+  (0x39) с initial_source_connection_id. Проба подтверждает
+  QUIC-эндпоинт и снимает форму ответа, но не доводит полный
+  QUIC-handshake до конца.
+- GeoIP-провайдеры расходятся и берут данные из общих источников. Их
+  теги VPN, proxy и Tor печатаются справочно и в score не входят.
+- Активный скан не видит того, что классификатор видит пассивно (списки
+  адресов, SNI-политика, эвристики первых пакетов, заморозка по объёму).
+  См. [docs/COVERAGE.md](docs/COVERAGE.md).
 
 ### Лицензия
 

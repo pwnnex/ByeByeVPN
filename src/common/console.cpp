@@ -3,8 +3,10 @@
 #include "config.h"
 #include "winhdr.h"
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace C {
@@ -18,6 +20,10 @@ namespace C {
     const char* MAG  = "\x1b[35m";
     const char* CYN  = "\x1b[36m";
     const char* WHT  = "\x1b[97m";
+    // 256-colour accents, every vt console since windows 10 1607
+    const char* ACC  = "\x1b[38;5;81m";
+    const char* RULE = "\x1b[38;5;60m";
+    const char* ORG  = "\x1b[38;5;208m";
 }
 
 const char* col(const char* c) { return g_no_color ? "" : c; }
@@ -30,8 +36,8 @@ void enable_vt() {
     SetConsoleOutputCP(CP_UTF8);
 }
 
-// strip ANSI CSI / SGR sequences (ESC '[' ... letter) when teeing to file.
-// we only emit CSI sequences in the codebase, so this is sufficient.
+// strip ansi csi / sgr sequences (esc '[' ... letter) when teeing to file.
+// we only emit csi sequences in the codebase, so this is sufficient.
 static void save_write_stripped(const char* s, size_t n) {
     if (!g_save_fp || !s || !n) return;
     for (size_t i = 0; i < n; ) {
@@ -49,8 +55,8 @@ static void save_write_stripped(const char* s, size_t n) {
 int tee_printf(const char* fmt, ...) {
     if (!fmt) return 0;
     // in --json mode the human-readable scan output is moved to stderr so
-    // stdout carries only the final JSON object. the save file still gets
-    // the full ANSI-stripped human output regardless.
+    // stdout carries only the final json object. the save file still gets
+    // the full ansi-stripped human output regardless.
     FILE* sink = g_json ? stderr : stdout;
     va_list ap;
     va_start(ap, fmt);
@@ -86,15 +92,57 @@ int tee_puts(const char* s) {
     return 0;
 }
 
+namespace {
+// fixed width so the rules line up with the logo
+const int BANNER_WIDTH = 55;
+
+void rule_line(int width) {
+    tee_printf("  %s", col(C::RULE));
+    for (int i = 0; i < width; ++i) tee_printf("\xe2\x94\x80");
+    tee_printf("%s\n", col(C::RST));
+}
+}
+
 void banner() {
-    tee_printf("%s%s", col(C::BOLD), col(C::MAG));
-    tee_puts(" ____             ____           __     ______  _   _ ");
-    tee_puts("| __ ) _   _  ___| __ ) _   _  __\\ \\   / /  _ \\| \\ | |");
-    tee_puts("|  _ \\| | | |/ _ \\  _ \\| | | |/ _ \\ \\ / /| |_) |  \\| |");
-    tee_puts("| |_) | |_| |  __/ |_) | |_| |  __/\\ V / |  __/| |\\  |");
-    tee_puts("|____/ \\__, |\\___|____/ \\__, |\\___| \\_/  |_|   |_| \\_|");
-    tee_puts("       |___/            |___/                          ");
-    tee_printf("%s", col(C::RST));
-    tee_printf("%s  Full TSPU/DPI/VPN detectability scanner  v2.8.3%s\n\n",
-               col(C::DIM), col(C::RST));
+    static const char* const LOGO[] = {
+        " ____             ____           __     ______  _   _ ",
+        "| __ ) _   _  ___| __ ) _   _  __\\ \\   / /  _ \\| \\ | |",
+        "|  _ \\| | | |/ _ \\  _ \\| | | |/ _ \\ \\ / /| |_) |  \\| |",
+        "| |_) | |_| |  __/ |_) | |_| |  __/\\ V / |  __/| |\\  |",
+        "|____/ \\__, |\\___|____/ \\__, |\\___| \\_/  |_|   |_| \\_|",
+        "       |___/            |___/                          ",
+    };
+    // cyan to violet, top to bottom
+    static const int SHADE[] = {87, 81, 75, 69, 63, 99};
+    tee_printf("\n");
+    for (int i = 0; i < 6; ++i) {
+        if (g_no_color) tee_printf("  %s\n", LOGO[i]);
+        else tee_printf("  \x1b[1;38;5;%dm%s\x1b[0m\n", SHADE[i], LOGO[i]);
+    }
+    rule_line(BANNER_WIDTH);
+    tee_printf("  %s%s%s%s  %s\xc2\xb7  your node through a DPI box's eyes%s\n",
+               col(C::BOLD), col(C::ACC), SCANNER_VERSION, col(C::RST), col(C::DIM), col(C::RST));
+    rule_line(BANNER_WIDTH);
+}
+
+void section(int step, int total, const char* title, const std::string& detail) {
+    tee_printf("\n%s\xe2\x96\x8c%s %s%d/%d%s  %s%s%s", col(C::ACC), col(C::RST), col(C::DIM), step, total,
+               col(C::RST), col(C::BOLD), title, col(C::RST));
+    if (!detail.empty()) tee_printf("   %s%s%s", col(C::DIM), detail.c_str(), col(C::RST));
+    tee_printf("\n");
+}
+
+void card(const char* color, const std::string& head, const std::string& text) {
+    // ascii inside, so byte length is display width
+    const size_t inner = std::max<size_t>(56, head.size() + text.size() + 6);
+    const size_t pad = inner - head.size() - text.size() - 4;
+    auto edge = [&](const char* l, const char* r) {
+        tee_printf("  %s%s", col(color), l);
+        for (size_t i = 0; i < inner; ++i) tee_printf("\xe2\x94\x80");
+        tee_printf("%s%s\n", r, col(C::RST));
+    };
+    edge("\xe2\x95\xad", "\xe2\x95\xae");
+    tee_printf("  %s\xe2\x94\x82%s  %s%s%s%s  %s%*s%s\xe2\x94\x82%s\n", col(color), col(C::RST), col(C::BOLD), col(color),
+               head.c_str(), col(C::RST), text.c_str(), (int)pad, "", col(color), col(C::RST));
+    edge("\xe2\x95\xb0", "\xe2\x95\xaf");
 }

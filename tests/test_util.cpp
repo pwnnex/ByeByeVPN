@@ -61,6 +61,41 @@ TEST_CASE("json_get_str handles escaped quote in value") {
     CHECK(json_get_str(body, "name") == "a\"b");
 }
 
+TEST_CASE("json_get_str only matches at a key position") {
+    // skip the value "asn" and find the actual key
+    std::string body = R"({"org":"asn","asn":13335})";
+    CHECK(json_get_str(body, "asn") == "13335");
+
+    // a token that is only ever a value must not resolve at all.
+    std::string only_value = R"({"org":"is_vpn"})";
+    CHECK(json_get_str(only_value, "is_vpn") == "");
+}
+
+TEST_CASE("json_get_str requires the ':' separator after the key") {
+    // a bare quoted token inside an array isn't a key/value pair.
+    std::string body = R"({"tags":["is_vpn"],"is_vpn":true})";
+    CHECK(json_get_str(body, "is_vpn") == "true");
+}
+
+TEST_CASE("json_get_str reports a nested object as absent, not as a shard") {
+    // nested objects aren't scalar values
+    std::string body = R"({"ip":"1.2.3.4","asn":{"asn":13335,"org":"Cloudflare"}})";
+    CHECK(json_get_str(body, "asn") == "");
+    CHECK(json_get_str(body, "ip")  == "1.2.3.4");
+}
+
+TEST_CASE("json_get_str tolerates pretty-printed bodies") {
+    std::string body =
+        "{\n"
+        "  \"ip\": \"1.2.3.4\",\n"
+        "  \"is_vpn\": false,\n"
+        "  \"city\": \"Berlin\"\n"
+        "}";
+    CHECK(json_get_str(body, "ip")     == "1.2.3.4");
+    CHECK(json_get_str(body, "is_vpn") == "false");
+    CHECK(json_get_str(body, "city")   == "Berlin");
+}
+
 TEST_CASE("icontains is case-insensitive substring") {
     CHECK(icontains("Cloudflare, Inc.", "cloudflare"));
     CHECK(icontains("HOSTKEY B.V.", "hostkey"));
@@ -120,7 +155,7 @@ TEST_CASE("mac_to_str formats colon-separated hex") {
 #include <algorithm>
 
 TEST_CASE("crypto_shuffle is a permutation of its input (no loss, no dups)") {
-    // the J3 probe-order randomizer rides on this; verify the basics. it
+    // the j3 probe-order randomizer rides on this; verify the basics. it
     // would be hostile to assert specific orderings (the whole point is
     // randomness), but every element of the input must appear exactly once
     // in the output, otherwise probes go missing or get doubled.

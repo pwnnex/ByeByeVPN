@@ -11,7 +11,7 @@ namespace {
 
 struct BrandMarker {
     const char* brand;
-    const char* asn_markers;  // comma-separated ASN-org substrings
+    const char* asn_markers;  // comma-separated asn-org substrings
 };
 
 const BrandMarker BRAND_TABLE[] = {
@@ -61,7 +61,7 @@ const BrandMarker BRAND_TABLE[] = {
     {"slack.com",      "slack,amazon,aws"},
     {"zoom.us",        "zoom"},
     {"signal.org",     "signal,amazon,aws"},
-    // RU-priority (state DPI context)
+    // ru-priority (state dpi context)
     {"yandex.ru",      "yandex"},
     {"yandex.net",     "yandex"},
     {"yandex.com",     "yandex"},
@@ -79,7 +79,7 @@ const BrandMarker BRAND_TABLE[] = {
     {"dzen.ru",        "yandex,vk"},
     {"habr.com",       "habr,habrahabr"},
     {"rambler.ru",     "rambler,rambler internet"},
-    // Russian banks / state
+    // russian banks / state
     {"sberbank.ru",    "sberbank,sber"},
     {"sber.ru",        "sberbank,sber"},
     {"sberbank.com",   "sberbank,sber"},
@@ -93,7 +93,7 @@ const BrandMarker BRAND_TABLE[] = {
     {"mos.ru",         "dit,moscow,mgts"},
     {"rt.ru",          "rostelecom,rt"},
     {"nalog.gov.ru",   "rostelecom,rt"},
-    // Russian telecom
+    // russian telecom
     {"mts.ru",         "mts"},
     {"megafon.ru",     "megafon"},
     {"beeline.ru",     "beeline,vimpelcom,pjsc vimpelcom"},

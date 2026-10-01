@@ -1,0 +1,39 @@
+{
+  "inbounds": [
+    {
+      "protocol": "vless",
+      "port": 443,
+      "settings": {
+        "decryption": "none",
+        "clients": [
+          {
+            "id": "5f2e1a44-7d1c-4c6a-9b36-2a8c1e0f9d11",
+            "flow": "xtls-rprx-vision"
+          }
+        ],
+        "fallbacks": [
+          {
+            "dest": 8080
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "target": "example.com:443",
+          "serverNames": [
+            "example.com"
+          ],
+          "privateKey": "x",
+          "shortIds": [
+            "0123abcd"
+          ]
+        },
+        "wsSettings": {
+          "path": "/ws"
+        }
+      }
+    }
+  ]
+}

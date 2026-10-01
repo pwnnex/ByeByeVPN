@@ -15,7 +15,7 @@ a fresh msys2 install or from the msys2 repository mirror directly.
 | Compiler      | g++ 15.2.0 (MinGW-w64 UCRT posix-seh, WinLibs r7) | https://winlibs.com/                                   |
 | C++ standard  | `-std=c++20`                                      | compiler built-in                                      |
 | OpenSSL       | 3.6.2                                             | msys2 pkg `mingw-w64-ucrt-x86_64-openssl-3.6.2-2`      |
-| Host          | Windows 11 Pro 10.0.26200                         | -                                                      |
+| Host          | Windows 10 or 11, x64                             | -                                                      |
 | Target        | x86_64-w64-mingw32, `_WIN32_WINNT=0x0A00` (Win10+)| compile flag                                           |
 
 ## Static archive provenance
@@ -157,7 +157,7 @@ minisign -Vm byebyevpn-v2.6.0-win64.zip -P <project-public-key>
 
 The public key is published in the repo (`minisign.pub`) and in the
 release notes. A good signature means the artifact came from the CI
-pipeline unmodified — useful when GitHub's own CDN is the thing you
+pipeline unmodified, useful when GitHub's own CDN is the thing you
 don't trust.
 
 Signing is keyed off the `MINISIGN_SECRET_KEY` / `MINISIGN_PASSWORD`
@@ -206,3 +206,13 @@ exe so anyone can cross-check against a tag's release zip.
 Stripping PE timestamps + linker build-ids for full byte-repro is on
 the roadmap (requires `objcopy --remove-section=.buildid` + a
 post-link timestamp patcher).
+
+## Ground-truth gate
+
+After the Windows job the workflow runs the `groundtruth` job: the exe it
+just built is scanned against the loopback stands in `tools/groundtruth/`
+(xray v26.7.28 is fetched and checked against a pinned sha256). Any false
+positive, any label outside a stand's accepted set, or a stand that did not
+start fails the run. Do not tag a release from a run where this job is red.
+Locally: `python tools/groundtruth/run.py ./byebyevpn.exe --tag <name>`,
+details in [docs/GROUNDTRUTH.md](docs/GROUNDTRUTH.md).

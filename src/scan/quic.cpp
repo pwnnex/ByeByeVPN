@@ -12,7 +12,7 @@ using std::vector;
 
 namespace {
 
-// QUIC v1 Initial salt (RFC 9001 §5.2).
+// quic v1 Initial salt (rfc 9001 §5.2).
 const uint8_t INITIAL_SALT[20] = {
     0x38,0x76,0x2c,0xf7,0xf5,0x59,0x34,0xb3,0x4d,0x17,
     0x9a,0xe6,0xa4,0xc8,0x0c,0xad,0xcc,0xbb,0x7f,0x0a
@@ -25,7 +25,7 @@ vector<uint8_t> hmac_sha256(const vector<uint8_t>& key, const uint8_t* data, siz
     return vector<uint8_t>(mac, mac + ml);
 }
 
-// AES-128-GCM seal. out = ciphertext || 16-byte tag. false on any EVP error.
+// aes-128-gcm seal. out = ciphertext || 16-byte tag. false on any evp error.
 bool gcm_encrypt(const vector<uint8_t>& key, const vector<uint8_t>& nonce,
                  const vector<uint8_t>& aad, const vector<uint8_t>& pt,
                  vector<uint8_t>& out) {
@@ -55,7 +55,7 @@ bool gcm_encrypt(const vector<uint8_t>& key, const vector<uint8_t>& nonce,
     return ok;
 }
 
-// AES-128-GCM open. ct_tag = ciphertext || 16-byte tag. false on tag mismatch.
+// aes-128-gcm open. ct_tag = ciphertext || 16-byte tag. false on tag mismatch.
 bool gcm_decrypt(const vector<uint8_t>& key, const vector<uint8_t>& nonce,
                  const vector<uint8_t>& aad, const vector<uint8_t>& ct_tag,
                  vector<uint8_t>& out) {
@@ -132,7 +132,7 @@ vector<uint8_t> hkdf_extract(const vector<uint8_t>& salt, const vector<uint8_t>&
 
 vector<uint8_t> hkdf_expand_label(const vector<uint8_t>& secret, const string& label,
                                   const vector<uint8_t>& context, size_t length) {
-    // HkdfLabel = u16(length) | u8(len) "tls13 "+label | u8(len) context
+    // hkdflabel = u16(length) | u8(len) "tls13 "+label | u8(len) context
     string full = "tls13 " + label;
     vector<uint8_t> info;
     info.push_back((uint8_t)(length >> 8));
@@ -142,7 +142,7 @@ vector<uint8_t> hkdf_expand_label(const vector<uint8_t>& secret, const string& l
     info.push_back((uint8_t)context.size());
     info.insert(info.end(), context.begin(), context.end());
 
-    // HKDF-Expand (RFC 5869): T(i) = HMAC(secret, T(i-1) | info | i)
+    // hkdf-expand (rfc 5869): T(i) = HMAC(secret, T(i-1) | info | i)
     vector<uint8_t> okm, prev;
     uint8_t counter = 1;
     while (okm.size() < length) {
@@ -191,14 +191,14 @@ vector<uint8_t> quic_build_client_initial(const vector<uint8_t>& dcid,
                                           const vector<uint8_t>& crypto,
                                           uint32_t packet_number,
                                           uint32_t version) {
-    // Initial keys are always derived with the QUIC v1 salt; for a forced-VN
+    // initial keys are always derived with the quic v1 salt; for a forced-vn
     // probe (reserved version) the server never decrypts, so the v1 keys just
     // produce well-formed-looking bytes under a bogus version field.
     QuicInitialSecrets s = quic_initial_secrets(dcid, true);
     if (!s.ok) return {};
     const int pn_len = 4;
 
-    // plaintext payload: one CRYPTO frame (type 0x06) carrying the TLS bytes.
+    // plaintext payload: one crypto frame (type 0x06) carrying the tls bytes.
     vector<uint8_t> pt;
     pt.push_back(0x06);
     { auto v = quic_varint(0);             pt.insert(pt.end(), v.begin(), v.end()); } // offset
@@ -216,10 +216,10 @@ vector<uint8_t> quic_build_client_initial(const vector<uint8_t>& dcid,
     hdr.push_back((uint8_t)scid.size()); hdr.insert(hdr.end(), scid.begin(), scid.end());
     hdr.push_back(0x00);                              // token length = 0
 
-    // pad with PADDING frames (0x00) so the datagram is >= 1200 bytes. the
+    // pad with padding frames (0x00) so the datagram is >= 1200 bytes. the
     // length field is a fixed 2-byte varint (value < 16384 for a 1200B Initial).
-    size_t header_len = hdr.size() + 2 /*length varint*/ + pn_len;
-    size_t total = header_len + pt.size() + 16 /*tag*/;
+    size_t header_len = hdr.size() + 2 /*length varint */ + pn_len;
+    size_t total = header_len + pt.size() + 16 /*tag */;
     if (total < 1200) pt.resize(pt.size() + (1200 - total), 0x00);
 
     uint64_t length_val = (uint64_t)pn_len + pt.size() + 16;
@@ -233,7 +233,7 @@ vector<uint8_t> quic_build_client_initial(const vector<uint8_t>& dcid,
     hdr.push_back((uint8_t)(packet_number >> 8));
     hdr.push_back((uint8_t)(packet_number));
 
-    // nonce = iv XOR left-padded packet number.
+    // nonce = iv xor left-padded packet number.
     vector<uint8_t> nonce = s.iv;
     nonce[8]  ^= (uint8_t)(packet_number >> 24);
     nonce[9]  ^= (uint8_t)(packet_number >> 16);
@@ -266,9 +266,9 @@ bool quic_unprotect_client_initial(const vector<uint8_t>& dg, const vector<uint8
     size_t pos = 1;                                   // skip first byte
     pos += 4;                                         // version
     if (pos >= dg.size()) return false;
-    uint8_t dl = dg[pos++]; pos += dl;                // DCID
+    uint8_t dl = dg[pos++]; pos += dl;                // dcid
     if (pos >= dg.size()) return false;
-    uint8_t sl = dg[pos++]; pos += sl;                // SCID
+    uint8_t sl = dg[pos++]; pos += sl;                // scid
     uint64_t token_len = 0;
     if (!parse_varint(dg, pos, token_len)) return false;
     pos += token_len;                                 // token
@@ -299,7 +299,7 @@ bool quic_unprotect_client_initial(const vector<uint8_t>& dg, const vector<uint8
     if (pn_offset + (size_t)length_val > dg.size()) return false;
     // length_val is an unchecked wire varint; if it is < pn_len the unsigned
     // subtraction below would underflow into a huge ct_len and try to build a
-    // multi-gigabyte vector (OOB / DoS). reject the malformed packet.
+    // multi-gigabyte vector (oob / dos). reject the malformed packet.
     if ((size_t)length_val < (size_t)pn_len) return false;
     size_t ct_start = pn_offset + (size_t)pn_len;
     size_t ct_len = (size_t)length_val - (size_t)pn_len;
@@ -314,12 +314,12 @@ bool quic_unprotect_client_initial(const vector<uint8_t>& dg, const vector<uint8
     vector<uint8_t> pt;
     if (!gcm_decrypt(s.key, nonce, hdr, ct_tag, pt)) return false;
 
-    // walk frames, skip PADDING (0x00), return the first CRYPTO (0x06) data.
+    // walk frames, skip padding (0x00), return the first crypto (0x06) data.
     size_t p = 0;
     while (p < pt.size()) {
         uint8_t ft = pt[p];
-        if (ft == 0x00) { ++p; continue; }            // PADDING
-        if (ft == 0x06) {                             // CRYPTO
+        if (ft == 0x00) { ++p; continue; }            // padding
+        if (ft == 0x06) {                             // crypto
             ++p;
             uint64_t off = 0, clen = 0;
             if (!parse_varint(pt, p, off)) return false;
@@ -333,7 +333,7 @@ bool quic_unprotect_client_initial(const vector<uint8_t>& dg, const vector<uint8
     return false;
 }
 
-// ---- transport parameters + QUIC ClientHello -------------------------------
+// transport params + quic clienthello
 
 namespace {
 
@@ -349,7 +349,7 @@ void tp_bytes(vector<uint8_t>& o, uint64_t id, const vector<uint8_t>& val) {
     o.insert(o.end(), val.begin(), val.end());
 }
 
-// tiny length-prefix-backpatching byte builder for the ClientHello.
+// tiny length-prefix-backpatching byte builder for the clienthello.
 struct CHB {
     vector<uint8_t> v;
     void u8(uint8_t x)   { v.push_back(x); }
@@ -381,11 +381,11 @@ vector<uint8_t> quic_transport_params(const vector<uint8_t>& scid) {
 
 vector<uint8_t> quic_build_client_hello(const string& sni, const vector<uint8_t>& scid) {
     CHB b;
-    b.u8(0x01);                         // HandshakeType client_hello
+    b.u8(0x01);                         // handshaketype client_hello
     size_t hs = b.m24();
-    b.u16(0x0303);                      // legacy_version TLS 1.2
+    b.u16(0x0303);                      // legacy_version tls 1.2
     uint8_t rnd[32]; RAND_bytes(rnd, 32); b.raw(rnd, 32);
-    b.u8(0x00);                         // legacy_session_id: empty (QUIC)
+    b.u8(0x00);                         // legacy_session_id: empty (quic)
 
     size_t cs = b.m16();                // cipher_suites
     b.u16(0x1301); b.u16(0x1302); b.u16(0x1303);
@@ -407,7 +407,7 @@ vector<uint8_t> quic_build_client_hello(const string& sni, const vector<uint8_t>
     b.u16(0x002d); { size_t e = b.m16(); b.u8(0x01); b.u8(0x01); b.p16(e); }                         // psk modes
     b.u16(0x0033); { size_t e = b.m16(); size_t l = b.m16(); b.u16(0x001d); b.u16(0x0020);           // key_share x25519
         uint8_t ks[32]; RAND_bytes(ks, 32); b.raw(ks, 32); b.p16(l); b.p16(e); }
-    b.u16(0x0010); { size_t e = b.m16(); size_t l = b.m16(); b.u8(2); b.str("h3"); b.p16(l); b.p16(e); } // ALPN h3
+    b.u16(0x0010); { size_t e = b.m16(); size_t l = b.m16(); b.u8(2); b.str("h3"); b.p16(l); b.p16(e); } // alpn h3
     { vector<uint8_t> tp = quic_transport_params(scid);                                              // 0x39 transport params
       b.u16(0x0039); size_t e = b.m16(); b.raw(tp); b.p16(e); }
     b.p16(eb);
@@ -418,7 +418,7 @@ vector<uint8_t> quic_build_client_hello(const string& sni, const vector<uint8_t>
 vector<uint8_t> quic_build_vn_probe(const vector<uint8_t>& dcid,
                                     const vector<uint8_t>& scid,
                                     const vector<uint8_t>& crypto) {
-    // a reserved version (0x?a?a?a?a pattern) forces Version-Negotiation.
+    // a reserved version (0x?a?a?a?a pattern) forces version-negotiation.
     return quic_build_client_initial(dcid, scid, crypto, 1, 0x1a2a3a4aU);
 }
 
@@ -439,7 +439,7 @@ QuicResponse quic_parse_response(const vector<uint8_t>& dg) {
     if (pos >= dg.size()) { r.kind = QuicResponse::Kind::Unknown; return r; }
     uint8_t sl = dg[pos++]; pos += sl;
 
-    if (r.version == 0) {                          // Version-Negotiation
+    if (r.version == 0) {                          // version-negotiation
         r.kind = QuicResponse::Kind::VersionNegotiation;
         while (pos + 4 <= dg.size()) {
             r.versions.push_back(((uint32_t)dg[pos] << 24) | ((uint32_t)dg[pos + 1] << 16) |

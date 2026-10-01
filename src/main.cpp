@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// entry point: WSAStartup + OpenSSL init, CLI arg parsing, dispatch.
+// entry point: WSAStartup + openssl init, cli arg parsing, dispatch.
 #include "common/winhdr.h"
 #include "common/console.h"
 #include "common/config.h"
@@ -15,12 +15,15 @@
 #include "scan/grpc.h"
 #include "scan/dpi_probe.h"
 #include "scan/ech.h"
+#include "scan/hostname_marks.h"
 #include "scan/snitch.h"
 #include "geoip/geoip.h"
 #include "local/local.h"
 #include "app/cli.h"
 #include "app/orchestrator.h"
 #include "app/target.h"
+#include "app/verdict.h"
+#include "app/preflight.h"
 #include "app/json_report.h"
 #include "app/sweep.h"
 
@@ -72,6 +75,17 @@ int main(int argc, char** argv) {
             if (n > 0 && n < 8) g_j3_subset = n;
         }
         else if (a == "--json")       g_json = true;
+        else if (a == "--i-know-what-i-am-doing") g_override_preflight = true;
+        else if (a == "--expect-ip" && i + 1 < argc) g_expect_ip = argv[++i];
+        else if (a == "--wg-pubkey" && i + 1 < argc) g_wg_pubkey = argv[++i];
+        else if (a == "--wg-key"    && i + 1 < argc) g_wg_key    = argv[++i];
+        else if (a == "--wg-psk"    && i + 1 < argc) g_wg_psk    = argv[++i];
+        else if (a == "--volume"    && i + 1 < argc) g_volume_path    = argv[++i];
+        else if (a == "--control"   && i + 1 < argc) g_volume_control = argv[++i];
+        else if (a == "--wg-port"   && i + 1 < argc) {
+            int p = std::atoi(argv[++i]);
+            if (p > 0 && p < 65536) g_wg_port = p;
+        }
         else if (a == "--save") {
             g_save_requested = true;
             if (i + 1 < argc) {
@@ -109,272 +123,12 @@ int main(int argc, char** argv) {
         else pos.push_back(a);
     }
 
-    // open save file BEFORE banner so it captures the banner too.
-    if (g_save_requested) {
-        string path = g_save_path;
-        if (path.empty()) {
-            string target;
-            if (!pos.empty()) {
-                static const set<string> cmds = {
-                    "scan","full","ports","udp","tls","j3","geoip",
-                    "snitch","trace","traceroute","local","me","self","help",
-                    "audit-config","audit","sweep","grpc","dpi","ech"
-                };
-                if (pos.size() >= 2 && cmds.count(pos[0])) target = pos[1];
-                else                                       target = pos[0];
-            }
-            if (target.empty() || target == "local" || target == "me" || target == "self")
-                path = "byebyevpn-scan.md";
-            else {
-                string safe;
-                for (char c: target) {
-                    if (c==':'||c=='/'||c=='\\'||c=='*'||c=='?'||c=='"'||
-                        c=='<'||c=='>'||c=='|') safe += '_';
-                    else                        safe += c;
-                }
-                path = safe + ".md";
-            }
-        }
-        g_save_fp = std::fopen(path.c_str(), "w");
-        if (!g_save_fp) {
-            std::fprintf(stderr,
-                "warn: --save: cannot open '%s' for writing (%s); continuing without save\n",
-                path.c_str(), std::strerror(errno));
-        } else {
-            g_save_path = path;
-            time_t now = std::time(nullptr);
-            struct tm* lt = std::localtime(&now);
-            std::fprintf(g_save_fp, "# Scan report\n\n");
-            if (lt) std::fprintf(g_save_fp,
-                                 "**Date:** %04d-%02d-%02d %02d:%02d:%02d  \n",
-                                 1900 + lt->tm_year, 1 + lt->tm_mon, lt->tm_mday,
-                                 lt->tm_hour, lt->tm_min, lt->tm_sec);
-            if (!pos.empty())
-                std::fprintf(g_save_fp, "**Target:** `%s`  \n", pos.back().c_str());
-            std::fprintf(g_save_fp, "**Scanner version:** v2.8.3  \n\n");
-            std::fprintf(g_save_fp, "```\n");
-        }
-    }
+    // open save file before banner so it captures the banner too.
+    save_begin(pos);
 
     banner();
-    int rc = 0;
-    // exit-code helper: a completed full scan exits 0/1/2/3 by verdict tier
-    // so wrapper scripts can branch without parsing output.
-    //   0 = CLEAN, 1 = NOISY, 2 = SUSPICIOUS, 3 = OBVIOUSLY-VPN
-    // usage / runtime errors use 64 (EX_USAGE) to stay out of that range.
-    auto verdict_exit = [](const FullReport& R) -> int {
-        if (R.score >= 85) return 0;
-        if (R.score >= 70) return 1;
-        if (R.score >= 50) return 2;
-        return 3;
-    };
-    if (pos.empty()) {
-        interactive();
-    } else {
-        string cmd = pos[0];
-        if (cmd == "scan" || cmd == "full") {
-            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
-            FullReport R = run_full_target(pos[1]);
-            if (g_json) std::fputs(json_report(R).c_str(), stdout);
-            rc = verdict_exit(R);
-        } else if (cmd == "ports") {
-            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
-            auto rs = resolve_host(pos[1]);
-            auto op = scan_tcp(rs.primary_ip.empty() ? pos[1] : rs.primary_ip,
-                               build_tcp_ports(), g_threads, g_tcp_to);
-            for (auto& o: op)
-                printf("  :%-5d  %lldms  %s\n", o.port, o.connect_ms, port_hint(o.port));
-        } else if (cmd == "udp") {
-            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
-            auto rs = resolve_host(pos[1]); string ip = rs.primary_ip.empty() ? pos[1] : rs.primary_ip;
-            auto show = [&](const char* n, int p, const UdpResult& u){
-                printf("  UDP:%-5d  %-22s  %s\n", p, n,
-                    u.responded ? ("RESP " + std::to_string(u.bytes) + "B " + u.reply_hex).c_str()
-                                : ("no answer (" + u.err + ")").c_str());
-            };
-            show("WireGuard",      51820, wireguard_probe(ip, 51820));
-            show("AmneziaWG Sx=8", 51820, amneziawg_probe(ip, 51820));
-            show("AmneziaWG Sx=8", 55555, amneziawg_probe(ip, 55555));
-            // curated Hysteria2/QUIC port set (was just 36712 + 443); print
-            // responders individually, collapse the silent ones to one line.
-            static const int HY_PORTS[] = {443, 8443, 2096, 36712, 5667, 34567, 20000};
-            int qp = 0;
-            string hy_silent;
-            for (int hp : HY_PORTS) {
-                UdpResult u = hysteria2_probe(ip, hp);
-                if (u.responded) {
-                    show("Hysteria2 QUIC", hp, u);
-                    string qs = quic_reply_summary(u);
-                    if (!qs.empty()) printf("                            %s\n", qs.c_str());
-                    if (!qp) qp = hp;
-                } else {
-                    if (!hy_silent.empty()) hy_silent += ",";
-                    hy_silent += std::to_string(hp);
-                }
-            }
-            if (!hy_silent.empty())
-                printf("  Hysteria2/QUIC:  silent on %s\n", hy_silent.c_str());
-            if (qp) {
-                UdpResult vn = hysteria2_vn_probe(ip, qp);
-                string qs = quic_reply_summary(vn);
-                string line = vn.responded ? (qs.empty() ? vn.reply_hex : qs)
-                                           : ("no VN answer (" + vn.err + ")");
-                printf("  UDP:%-5d  %-22s  %s\n", qp, "QUIC version-negotiation", line.c_str());
-            }
-        } else if (cmd == "tls") {
-            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
-            int port = pos.size() >= 3 ? std::atoi(pos[2].c_str()) : 443;
-            auto rs = resolve_host(pos[1]);
-            string ip = rs.primary_ip.empty() ? pos[1] : rs.primary_ip;
-            auto tp = tls_probe(ip, port, pos[1]);
-            if (!tp.ok) { printf("TLS fail: %s\n", tp.err.c_str()); rc = 1; goto done; }
-            printf("  %s / %s / ALPN=%s / %s / %lldms\n",
-                   tp.version.c_str(), tp.cipher.c_str(), tp.alpn.c_str(),
-                   tp.group.c_str(), tp.handshake_ms);
-            printf("  cert:   %s\n", tp.cert_subject.c_str());
-            printf("  issuer: %s\n", tp.cert_issuer.c_str());
-            printf("  sha256: %s\n", tp.cert_sha256.c_str());
-            auto sc = sni_consistency(ip, port, pos[1]);
-            for (auto& e: sc.entries)
-                printf("    %-35s  %s  %s\n", e.sni.c_str(),
-                       e.ok ? ("sha:" + e.sha.substr(0, 16)).c_str() : "fail",
-                       (e.ok && e.sha == sc.base_sha) ? "SAME" : "diff");
-            if (sc.reality_like)
-                printf("  => Reality/XTLS pattern (cert covers foreign SNI '%s')\n",
-                       sc.matched_foreign_sni.c_str());
-            else if (sc.default_cert_only)
-                printf("  => plain TLS server with single default cert (NOT Reality)\n");
-            else if (sc.same_cert_always)
-                printf("  => identical cert across SNIs but covers no foreign SNI (inconclusive)\n");
-            else
-                printf("  => cert varies per SNI (multi-tenant TLS, NOT Reality)\n");
-        } else if (cmd == "j3") {
-            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
-            int port = pos.size() >= 3 ? std::atoi(pos[2].c_str()) : 443;
-            auto rs = resolve_host(pos[1]); string ip = rs.primary_ip.empty() ? pos[1] : rs.primary_ip;
-            auto probes = j3_probes(ip, port);
-            for (auto& p: probes)
-                printf("  %-28s  %s  %dB %s\n", p.name.c_str(),
-                    p.responded ? "RESP" : "SILENT", p.bytes,
-                    p.responded ? printable_prefix(p.first_line, 60).c_str() : "(dropped)");
-        } else if (cmd == "geoip") {
-            string ip = pos.size() >= 2 ? pos[1] : "";
-            auto f1 = std::async(std::launch::async, geo_ipapi_is,  ip);
-            auto f2 = std::async(std::launch::async, geo_iplocate,  ip);
-            auto f3 = std::async(std::launch::async, geo_freeipapi, ip);
-            auto f4 = std::async(std::launch::async, geo_ipwho_is,  ip);
-            auto f5 = std::async(std::launch::async, geo_ipinfo_io, ip);
-            printf("  %s-- 5 HTTPS providers --%s\n", col(C::BOLD), col(C::RST));
-            print_geo(f1.get()); print_geo(f2.get()); print_geo(f3.get());
-            print_geo(f4.get()); print_geo(f5.get());
-        } else if (cmd == "local" || cmd == "me" || cmd == "self") {
-            run_local_analysis();
-        } else if (cmd == "snitch") {
-            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
-            int port = pos.size() >= 3 ? std::atoi(pos[2].c_str()) : 443;
-            auto rs = resolve_host(pos[1]);
-            string ip = rs.primary_ip.empty() ? pos[1] : rs.primary_ip;
-            auto g = geo_ipapi_is(ip);
-            string cc = g.country_code;
-            auto sn = snitch_check(ip, port, cc);
-            printf("  target=%s  port=%d  geoip=%s  asn=%s\n",
-                   ip.c_str(), port, cc.c_str(), g.asn_org.c_str());
-            printf("  median=%.1fms  min=%.1fms  max=%.1fms  stddev=%.1fms  samples=%d\n",
-                   sn.median_ms, sn.min_ms, sn.max_ms, sn.stddev_ms, sn.samples);
-            printf("  anchors: cf=%.1fms  google=%.1fms  yandex=%.1fms\n",
-                   sn.cf_median_ms, sn.google_median_ms, sn.yandex_median_ms);
-            printf("  expected-min for %s = %.0fms\n", cc.c_str(), sn.expected_min_ms);
-            printf("  => %s\n", sn.summary.c_str());
-        } else if (cmd == "trace" || cmd == "traceroute") {
-            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
-            auto rs = resolve_host(pos[1]);
-            string ip = rs.primary_ip.empty() ? pos[1] : rs.primary_ip;
-            int maxh = pos.size() >= 3 ? std::atoi(pos[2].c_str()) : 18;
-            auto tr = trace_hops(ip, maxh);
-            if (!tr.ok) { printf("  no hops returned\n"); rc = 1; goto done; }
-            for (auto& h: tr.hops) {
-                if (h.rtt_ms < 0) printf("  %2d  *\n", h.ttl);
-                else              printf("  %2d  %-16s  %dms\n", h.ttl, h.addr.c_str(), h.rtt_ms);
-            }
-            printf("  => %d hops, reached=%s, max_rtt_jump=%dms, long_hops>150ms=%d\n",
-                   tr.hop_count, tr.reached_target ? "yes" : "no",
-                   tr.max_rtt_jump_ms, tr.long_hops);
-        } else if (cmd == "grpc") {
-            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
-            int port = pos.size() >= 3 ? std::atoi(pos[2].c_str()) : 443;
-            auto rs = resolve_host(pos[1]);
-            string ip = rs.primary_ip.empty() ? pos[1] : rs.primary_ip;
-            GrpcProbe gp = grpc_probe(ip, port, pos[1]);
-            if (!gp.tls_ok) { printf("  TLS fail: %s\n", gp.err.c_str()); rc = 1; goto done; }
-            printf("  ALPN=%s  h2=%s  h2-frames=%s  headers=%s  rst=%s  goaway=%s\n",
-                   gp.alpn.empty() ? "-" : gp.alpn.c_str(),
-                   gp.alpn_h2 ? "yes" : "no", gp.h2_frames ? "yes" : "no",
-                   gp.headers_resp ? "yes" : "no", gp.stream_reset ? "yes" : "no",
-                   gp.goaway ? "yes" : "no");
-            printf("  => %s\n", gp.note.c_str());
-        } else if (cmd == "dpi") {
-            if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
-            int port = pos.size() >= 3 ? std::atoi(pos[2].c_str()) : 443;
-            auto rs = resolve_host(pos[1]);
-            string ip = rs.primary_ip.empty() ? pos[1] : rs.primary_ip;
-            DpiProbe d = dpi_probe(ip, port, pos[1]);
-            printf("  target=%s  sni=%s\n", ip.c_str(), pos[1].c_str());
-            if (d.tunneled) {
-                printf("  %s!! %s%s\n", col(C::YEL), d.note.c_str(), col(C::RST));
-                rc = 64; goto done;
-            }
-            auto state = [](bool reset, bool prog){ return reset ? "RESET" : (prog ? "ok" : "no-reply"); };
-            printf("  target-SNI: %-8s   benign-SNI: %-8s\n",
-                   state(d.target_reset, d.target_progressed),
-                   state(d.benign_reset, d.benign_progressed));
-            if (d.frag_tested)
-                printf("  fragmented CH: %s\n", d.frag_evades ? "EVADES (got through)" : "still reset");
-            printf("  => %s\n", d.note.c_str());
-            rc = d.sni_blocked ? 2 : 0;
-        } else if (cmd == "ech") {
-            if (pos.size() < 2) { printf("need a domain\n"); rc = 64; goto done; }
-            EchInfo e = ech_query(pos[1]);
-            if (!e.has_https_rr) {
-                printf("  %sno HTTPS RR for %s%s  (%s)\n",
-                       col(C::DIM), pos[1].c_str(), col(C::RST), e.err.c_str());
-                rc = 1; goto done;
-            }
-            printf("  %sHTTPS RR (DNS type 65) published for %s%s\n",
-                   col(C::BOLD), pos[1].c_str(), col(C::RST));
-            printf("  ALPN: %s%s%s%s\n", col(C::CYN),
-                   e.alpn.empty() ? "-" : e.alpn.c_str(), col(C::RST),
-                   e.alpn.find("h3") != string::npos ? "  (HTTP/3 advertised)" : "");
-            if (!e.ipv4hint.empty()) printf("  ipv4hint: %s\n", e.ipv4hint.c_str());
-            if (!e.ipv6hint.empty()) printf("  ipv6hint: %s\n", e.ipv6hint.c_str());
-            if (e.has_ech)
-                printf("  %sECH: YES%s  (ECHConfigList ~%d bytes) — SNI is encrypted, hidden from on-path DPI\n",
-                       col(C::GRN), col(C::RST), e.ech_len);
-            else
-                printf("  %sECH: no%s  (no ech= param; the SNI travels in cleartext and is DPI-visible)\n",
-                       col(C::YEL), col(C::RST));
-            rc = 0;
-        } else if (cmd == "audit-config" || cmd == "audit") {
-            if (pos.size() < 2) { printf("need a config file path\n"); rc = 64; goto done; }
-            rc = run_config_audit(pos[1]);
-        } else if (cmd == "sweep") {
-            if (pos.size() < 2) { printf("need a CIDR (e.g. 1.2.3.0/24)\n"); rc = 64; goto done; }
-            rc = run_sweep(pos[1]);
-        } else if (cmd == "help" || cmd == "--help") {
-            help();
-        } else {
-            // bare argument: treat as a target for a full scan.
-            FullReport R = run_full_target(cmd);
-            if (g_json) std::fputs(json_report(R).c_str(), stdout);
-            rc = verdict_exit(R);
-        }
-    }
-done:
-    if (g_save_fp) {
-        std::fprintf(g_save_fp, "```\n");
-        std::fclose(g_save_fp);
-        g_save_fp = nullptr;
-        std::fprintf(stderr, "saved to %s\n", g_save_path.c_str());
-    }
+    int rc = pos.empty() ? (interactive(), 0) : run_command(pos);
+    save_end();
     WSACleanup();
     return rc;
 }

@@ -28,3 +28,9 @@ doctest
   MIT License. Single-header unit-test framework, used only by the
   tests/ target, not linked into the shipped byebyevpn binary.
   https://github.com/doctest/doctest
+
+Public Suffix List
+  Mozilla Public License 2.0. Embedded snapshot and derived ASCII rule table.
+  Original: third_party/psl/public_suffix_list.dat
+  License: third_party/psl/LICENSE
+  https://publicsuffix.org/list/

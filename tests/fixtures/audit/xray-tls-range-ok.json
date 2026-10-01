@@ -1,0 +1,34 @@
+{
+  "inbounds": [
+    {
+      "protocol": "trojan",
+      "port": 443,
+      "settings": {
+        "clients": [
+          {
+            "password": "p1"
+          }
+        ],
+        "fallbacks": [
+          {
+            "dest": 80
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "certificates": [
+            {
+              "certificateFile": "/etc/x.crt",
+              "keyFile": "/etc/x.key"
+            }
+          ],
+          "minVersion": "1.2",
+          "maxVersion": "1.3"
+        }
+      }
+    }
+  ]
+}

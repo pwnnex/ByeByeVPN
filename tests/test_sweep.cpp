@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// unit tests for the pure CIDR + clustering logic in src/app/sweep_core.cpp.
+// unit tests for the pure cidr + clustering logic in src/app/sweep_core.cpp.
 #include "doctest.h"
 #include "../src/app/sweep.h"
 

@@ -1,0 +1,63 @@
+{
+  "inbounds": [
+    {
+      "protocol": "vless",
+      "port": 443,
+      "settings": {
+        "decryption": "none",
+        "clients": [
+          {
+            "id": "5f2e1a44-7d1c-4c6a-9b36-2a8c1e0f9d11",
+            "flow": "xtls-rprx-vision"
+          }
+        ],
+        "fallbacks": [
+          {
+            "dest": 8080
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "target": "example.com:443",
+          "serverNames": [
+            "example.com"
+          ],
+          "privateKey": "x",
+          "shortIds": [
+            "0123abcd"
+          ]
+        }
+      }
+    },
+    {
+      "protocol": "hysteria",
+      "port": 443,
+      "settings": {
+        "version": 2,
+        "clients": [
+          {
+            "auth": "a"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "hysteria",
+        "security": "tls",
+        "tlsSettings": {
+          "alpn": [
+            "h3"
+          ],
+          "certificates": [
+            {
+              "certificateFile": "/etc/x.crt",
+              "keyFile": "/etc/x.key"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

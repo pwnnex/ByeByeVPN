@@ -11,23 +11,23 @@ TEST_CASE("cert_claims_brand matches CN and SAN against the brand table") {
     CHECK(cert_claims_brand("www.amazon.com", no_san) == "amazon.com");
     CHECK(cert_claims_brand("amazon.com", no_san)     == "amazon.com");
     CHECK(cert_claims_brand("yandex.ru", no_san)      == "yandex.ru");
-    // wildcard CN strips the "*." before matching
+    // wildcard cn strips the "*." before matching
     CHECK(cert_claims_brand("*.cloudflare.com", no_san) == "cloudflare.com");
     // not a brand at all
     CHECK(cert_claims_brand("my-random-vps.example", no_san) == "");
-    // brand found via SAN even if CN is unrelated
+    // brand found via san even if cn is unrelated
     std::vector<std::string> san = {"node1.internal", "www.microsoft.com"};
     CHECK(cert_claims_brand("internal-name", san) == "microsoft.com");
 }
 
 TEST_CASE("asn_owns_brand cross-checks brand against ASN-org strings") {
-    // amazon.com is legitimately served from Amazon / AWS ASNs
+    // amazon.com is legitimately served from amazon / aws asns
     std::vector<std::string> aws = {"AMAZON-02", "Amazon Technologies Inc."};
     CHECK(asn_owns_brand("amazon.com", aws));
-    // ... but not from a random hosting ASN
+    // ... but not from a random hosting asn
     std::vector<std::string> hostkey = {"HOSTKEY B.V."};
     CHECK_FALSE(asn_owns_brand("amazon.com", hostkey));
-    // yandex.ru on a Yandex ASN is legit
+    // yandex.ru on a yandex asn is legit
     std::vector<std::string> yandex = {"YANDEX LLC"};
     CHECK(asn_owns_brand("yandex.ru", yandex));
     CHECK_FALSE(asn_owns_brand("yandex.ru", hostkey));
@@ -41,7 +41,7 @@ TEST_CASE("server_header_brand maps unforgeable Server banners") {
     CHECK(server_header_brand("AmazonS3")          == "amazon.com");
     CHECK(server_header_brand("gws")               == "google.com");
     CHECK(server_header_brand("Microsoft-IIS/10.0")== "microsoft.com");
-    // a generic banner is not brand-bound
+    // a generic banner isn't brand-bound
     CHECK(server_header_brand("nginx/1.24.0") == "");
     CHECK(server_header_brand("Apache")       == "");
     CHECK(server_header_brand("")             == "");

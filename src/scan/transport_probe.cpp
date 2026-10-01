@@ -1,94 +1,36 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "transport_probe.h"
-#include "tls_ctx.h"
-#include "../common/winhdr.h"
 #include "../common/util.h"
-#include "../net/tcp.h"
+#include <openssl/rand.h>
+#include <openssl/evp.h>
 
-#include <openssl/ssl.h>
-
-#include <string>
-#include <vector>
-
-using std::string;
-using std::vector;
-
-namespace {
-
-// one TLS request/response round-trip. returns the raw response (up to ~4 KB)
-// or empty on failure; *ok reports whether the TLS handshake completed.
-string tls_round_trip(const string& ip, int port, const string& sni,
-                      const string& request, int to_ms, bool& tls_ok) {
-    tls_ok = false;
-    string err;
-    SOCKET s = tcp_connect(ip, port, to_ms, err);
-    if (s == INVALID_SOCKET) return {};
-    DWORD tv = (DWORD)to_ms;
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv));
-
-    SSL_CTX* ctx = shared_tls_client_ctx();
-    SSL* ssl = ctx ? SSL_new(ctx) : nullptr;
-    if (!ssl) { closesocket(s); return {}; }
-    SSL_set_fd(ssl, (int)s);
-    if (!sni.empty()) SSL_set_tlsext_host_name(ssl, sni.c_str());
-    static const unsigned char alpn_h11[] = {8,'h','t','t','p','/','1','.','1'};
-    SSL_set_alpn_protos(ssl, alpn_h11, sizeof(alpn_h11));
-    if (SSL_connect(ssl) != 1) { SSL_free(ssl); closesocket(s); return {}; }
-    tls_ok = true;
-
-    string out;
-    if (SSL_write(ssl, request.data(), (int)request.size()) > 0) {
-        char buf[1024];
-        for (int i = 0; i < 5; ++i) {
-            int n = SSL_read(ssl, buf, sizeof(buf));
-            if (n <= 0) break;
-            out.append(buf, n);
-            if (out.size() >= 4096) break;
-        }
-    }
-    SSL_shutdown(ssl); SSL_free(ssl); closesocket(s);
-    return out;
-}
-
-string first_line_of(const string& resp) {
-    size_t nl = resp.find('\n');
-    return trim(resp.substr(0, nl == string::npos ? resp.size() : nl));
-}
-
-int status_of(const string& first) {
-    if (first.compare(0, 5, "HTTP/") != 0) return 0;
-    size_t sp = first.find(' ');
-    if (sp == string::npos) return 0;
-    return std::atoi(first.c_str() + sp + 1);
-}
-
-} // namespace
-
-WsProbe ws_probe(const string& ip, int port, const string& sni, int to_ms) {
+WsProbe ws_probe(const std::string& ip, int port, const std::string& sni, int to_ms) {
     WsProbe r;
-    // common VLESS/VMess-ws paths people leave on defaults.
-    static const char* PATHS[] = { "/", "/ws", "/vless", "/vmess", "/websocket", "/ray" };
-    for (const char* path : PATHS) {
-        string host = sni.empty() ? ip : sni;
-        string req =
-            string("GET ") + path + " HTTP/1.1\r\n"
-            "Host: " + host + "\r\n"
-            "Upgrade: websocket\r\n"
-            "Connection: Upgrade\r\n"
-            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-            "Sec-WebSocket-Version: 13\r\n\r\n";
-        bool ok = false;
-        string resp = tls_round_trip(ip, port, sni, req, to_ms, ok);
-        if (ok) r.tls_ok = true;
-        if (resp.empty()) continue;
-        string fl = first_line_of(resp);
-        if (status_of(fl) == 101) {           // Switching Protocols
+    const auto authority = http_authority(sni.empty() ? ip : sni, port);
+    if (authority.empty()) { r.err = "invalid HTTP authority"; return r; }
+    static const char* paths[] = {"/", "/ws", "/vless", "/vmess", "/websocket", "/ray"};
+    bool first = true;
+    for (const char* path : paths) {
+        if (!first) stealth_sleep_ms(200, 1200);
+        first = false;
+        unsigned char nonce[16]{}, encoded[25]{};
+        if (RAND_bytes(nonce, sizeof(nonce)) != 1) { r.err = "websocket nonce generation failed"; return r; }
+        const int length = EVP_EncodeBlock(encoded, nonce, sizeof(nonce));
+        const std::string key(reinterpret_cast<char*>(encoded), length);
+        const std::string request = std::string("GET ") + path + " HTTP/1.1\r\nHost: " + authority +
+            "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key +
+            "\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        const auto response = https_exchange(ip, port, sni, request, to_ms);
+        r.tls_ok = r.tls_ok || response.tls_ok;
+        if (r.first_line.empty()) r.first_line = response.first_line;
+        if (websocket_upgrade_valid(response, key)) {
             r.ws_upgrade = true;
             r.path_hit = path;
-            r.first_line = fl;
+            r.first_line = response.first_line;
+            r.err.clear();
             return r;
         }
-        if (r.first_line.empty()) r.first_line = fl;
+        r.err = response.http_valid ? "no valid WebSocket opening handshake on tested paths" : response.err;
     }
     return r;
 }

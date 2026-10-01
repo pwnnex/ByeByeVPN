@@ -1,13 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// GeoIP aggregation across 5 HTTPS-only providers.
-//
-// v2.6.0 scope cut: the four HTTP-only providers (api.2ip.me,
-// ip-api.com, ip-api.com/ru, api.sypexgeo.net) were removed. a plaintext
-// HTTP GeoIP query exposes the target IP being looked up to every
-// on-path observer between the scanner host and the provider, which on a
-// censored network is exactly the leak this tool is meant to help avoid.
-// the five remaining providers all speak HTTPS, so the lookup payload
-// stays encrypted in transit.
+// geoip aggregation across five https providers
+// queries reveal the target ip to those providers
 #pragma once
 
 #include <string>
@@ -23,7 +16,7 @@ struct GeoInfo {
     std::string err;
 };
 
-// all five providers are HTTPS-only.
+// all five providers are https-only.
 GeoInfo geo_ipapi_is(const std::string& ip);
 GeoInfo geo_iplocate(const std::string& ip);
 GeoInfo geo_freeipapi(const std::string& ip);

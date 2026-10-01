@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// subnet sweep — networking + threading half (run_sweep). the CIDR math and
+// subnet sweep - networking + threading half (run_sweep). the cidr math and
 // clustering live in sweep_core.cpp (pure, unit-tested).
 #include "sweep.h"
 #include "../common/winhdr.h"
@@ -21,8 +21,8 @@ using std::vector;
 
 namespace {
 
-// light per-host fingerprint: liveness on :443, then (if open) a JA4S probe
-// and a cert probe. no port scan, no J3 — just enough to cluster.
+// light per-host fingerprint: liveness on :443, then (if open) a ja4s probe
+// and a cert probe. no port scan, no j3 - just enough to cluster.
 SweepHost light_probe(const string& ip) {
     SweepHost h;
     h.ip = ip;
@@ -101,7 +101,7 @@ int run_sweep(const string& cidr) {
         printf("  %s[%zu host%s]%s %s\n",
                c, members.size(), members.size() == 1 ? "" : "s", col(C::RST),
                key.c_str());
-        // list the member IPs, capped so a /22 doesn't flood the terminal.
+        // list the member ips, capped so a /22 doesn't flood the terminal.
         printf("      ");
         size_t cap = 24;
         for (size_t i = 0; i < members.size() && i < cap; ++i)

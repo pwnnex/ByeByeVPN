@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "grpc.h"
+#include "https_probe.h"
+#include <algorithm>
+#include "tls_ctx.h"
+#include "tls_io.h"
 #include "../common/winhdr.h"
 #include "../net/tcp.h"
+#include "../common/util.h"
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -15,28 +20,9 @@ using std::vector;
 
 namespace {
 
-// ALPN offer: prefer h2, allow http/1.1 fallback so the handshake still
+// alpn offer: prefer h2, allow http/1.1 fallback so the handshake still
 // completes against a plain web server (we then see it chose http/1.1).
 const unsigned char ALPN_H2[] = { 2,'h','2', 8,'h','t','t','p','/','1','.','1' };
-
-// append a length-prefixed (no-Huffman) HPACK string literal.
-void hpack_str(vector<uint8_t>& o, const string& s) {
-    o.push_back((uint8_t)(s.size() & 0x7f));   // 7-bit length, H=0 (we keep <127)
-    o.insert(o.end(), s.begin(), s.end());
-}
-
-// build the HPACK header block for a minimal gRPC request.
-vector<uint8_t> grpc_headers_block(const string& authority, const string& path) {
-    vector<uint8_t> h;
-    h.push_back(0x83);                 // :method POST          (static idx 3)
-    h.push_back(0x87);                 // :scheme https         (static idx 7)
-    h.push_back(0x41); hpack_str(h, authority);                 // :authority (name idx 1)
-    h.push_back(0x44); hpack_str(h, path);                      // :path      (name idx 4)
-    h.push_back(0x5f); hpack_str(h, "application/grpc");        // content-type (name idx 31)
-    // te: trailers  — literal with incremental indexing, new name
-    h.push_back(0x40); hpack_str(h, "te"); hpack_str(h, "trailers");
-    return h;
-}
 
 void put_frame(vector<uint8_t>& o, uint8_t type, uint8_t flags,
                uint32_t stream, const vector<uint8_t>& payload) {
@@ -69,13 +55,21 @@ GrpcProbe grpc_probe(const string& ip, int port, const string& sni, int to_ms) {
     SSL* ssl = SSL_new(ctx);
     if (!ssl) { SSL_CTX_free(ctx); closesocket(s); r.err = "ssl alloc"; return r; }
     SSL_set_fd(ssl, (int)s);
-    if (!sni.empty()) SSL_set_tlsext_host_name(ssl, sni.c_str());
+    if (!sni.empty() && !is_ip_literal(sni)) SSL_set_tlsext_host_name(ssl, sni.c_str());
     SSL_set_alpn_protos(ssl, ALPN_H2, sizeof(ALPN_H2));
 
-    if (SSL_connect(ssl) != 1) {
-        r.err = "tls handshake failed";
-        SSL_free(ssl); SSL_CTX_free(ctx); closesocket(s);
-        return r;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(to_ms);
+    u_long nonblocking = 1;
+    if (ioctlsocket(s, FIONBIO, &nonblocking) != 0) {
+        r.err = "cannot enable nonblocking TLS I/O";
+        SSL_free(ssl); SSL_CTX_free(ctx); closesocket(s); return r;
+    }
+    auto transfer = [&](auto operation, const char* fallback) {
+        return tls_io(ssl, s, deadline, operation, err, fallback);
+    };
+    if (transfer([&] { return SSL_connect(ssl); }, "TLS handshake failed") != 1) {
+        r.err = err.empty() ? "TLS handshake closed" : err;
+        SSL_free(ssl); SSL_CTX_free(ctx); closesocket(s); return r;
     }
     r.tls_ok = true;
     const unsigned char* ap = nullptr; unsigned apl = 0;
@@ -85,21 +79,21 @@ GrpcProbe grpc_probe(const string& ip, int port, const string& sni, int to_ms) {
 
     if (!r.alpn_h2) {
         r.note = "server negotiated ALPN '" + (r.alpn.empty() ? string("-") : r.alpn) +
-                 "' (not h2) — gRPC requires HTTP/2, so a gRPC transport is unlikely here";
+                 "' (not h2); gRPC requires HTTP/2, so a gRPC transport is unlikely here";
         SSL_shutdown(ssl); SSL_free(ssl); SSL_CTX_free(ctx); closesocket(s);
         return r;
     }
 
-    // h2 negotiated: send the client preface + SETTINGS + a gRPC HEADERS frame.
+    // h2 negotiated: send the client preface + settings + a grpc headers frame.
     static const char PREFACE[] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
     vector<uint8_t> out(PREFACE, PREFACE + (sizeof(PREFACE) - 1));
-    put_frame(out, 0x4, 0x0, 0, {});   // empty SETTINGS
-    string authority = sni.empty() ? ip : sni;
-    vector<uint8_t> hb = grpc_headers_block(
+    put_frame(out, 0x4, 0x0, 0, {});   // empty settings
+    string authority = http_authority(sni.empty() ? ip : sni, port);
+    vector<uint8_t> hb = grpc_request_headers(
         authority, "/grpc.reflection.v1alpha.ServerReflection/ServerReflectionInfo");
-    put_frame(out, 0x1, 0x5, 1, hb);   // HEADERS, END_HEADERS|END_STREAM, stream 1
+    put_frame(out, 0x1, 0x5, 1, hb);   // headers, end_headers|end_stream, stream 1
 
-    if (SSL_write(ssl, out.data(), (int)out.size()) <= 0) {
+    if (transfer([&] { return SSL_write(ssl, out.data(), (int)out.size()); }, "h2 write failed") != (int)out.size()) {
         r.err = "h2 write failed";
         SSL_free(ssl); SSL_CTX_free(ctx); closesocket(s);
         return r;
@@ -107,49 +101,16 @@ GrpcProbe grpc_probe(const string& ip, int port, const string& sni, int to_ms) {
 
     vector<uint8_t> buf;
     char tmp[2048];
-    for (int i = 0; i < 6; ++i) {
-        int n = SSL_read(ssl, tmp, sizeof(tmp));
+    while (buf.size() < 8192) {
+        int n = transfer([&] { return SSL_read(ssl, tmp, static_cast<int>(std::min(sizeof(tmp), size_t(8192) - buf.size()))); }, "h2 read failed");
         if (n <= 0) break;
         buf.insert(buf.end(), tmp, tmp + n);
-        if (buf.size() >= 8192) break;
+        analyze_h2_response(buf, r);
+        if (r.headers_resp || r.stream_reset || r.goaway || (!r.err.empty() && r.err.rfind("incomplete", 0) != 0)) break;
     }
     SSL_shutdown(ssl); SSL_free(ssl); SSL_CTX_free(ctx); closesocket(s);
 
-    // best-effort marker scan (servers that don't Huffman-encode headers).
-    for (size_t i = 0; i + 4 <= buf.size(); ++i)
-        if (std::memcmp(buf.data() + i, "grpc", 4) == 0) { r.grpc_marker = true; break; }
-
-    // walk HTTP/2 frames.
-    size_t p = 0;
-    while (p + 9 <= buf.size()) {
-        uint32_t len = ((uint32_t)buf[p] << 16) | ((uint32_t)buf[p + 1] << 8) | buf[p + 2];
-        uint8_t  type = buf[p + 3];
-        uint32_t stream = (((uint32_t)buf[p + 5] << 24) | ((uint32_t)buf[p + 6] << 16) |
-                           ((uint32_t)buf[p + 7] << 8) | buf[p + 8]) & 0x7fffffff;
-        r.h2_frames = true;
-        if (type == 0x1 && stream == 1) r.headers_resp = true;   // HEADERS
-        if (type == 0x3 && stream == 1) r.stream_reset = true;   // RST_STREAM
-        if (type == 0x7)                r.goaway = true;         // GOAWAY
-        if (p + 9 + len < p + 9) break;                          // overflow guard
-        p += 9 + len;
-    }
-
-    if (!r.h2_frames) {
-        r.note = "ALPN h2 negotiated but the server returned no HTTP/2 frames to a "
-                 "gRPC request — h2-advertised but unresponsive (stream-proxy tell)";
-    } else if (r.headers_resp) {
-        r.note = string("HTTP/2 server answered the gRPC request with a HEADERS frame") +
-                 (r.grpc_marker ? " and gRPC markers — looks like a real gRPC service"
-                                : " — an HTTP/2 request handler (gRPC service or h2 web app)");
-    } else if (r.stream_reset) {
-        r.note = "HTTP/2 server RST our gRPC stream — h2 origin that doesn't serve this "
-                 "gRPC path (a VLESS/VMess-gRPC inbound routes only its configured "
-                 "serviceName, or a non-gRPC h2 server)";
-    } else if (r.goaway) {
-        r.note = "HTTP/2 server sent GOAWAY to the gRPC request — rejected at the "
-                 "connection level";
-    } else {
-        r.note = "HTTP/2 frames seen (SETTINGS) but no answer to the gRPC stream";
-    }
+    analyze_h2_response(buf, r);
+    if (!err.empty()) r.err = r.err.empty() ? err : r.err + "; " + err;
     return r;
 }

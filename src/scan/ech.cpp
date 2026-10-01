@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// pure HTTPS-RR parser (no network). compiled into the unit-test build; the DoH
+// pure https-rr parser (no network). compiled into the unit-test build; the doh
 // fetch lives in ech_query.cpp.
 //
-// resolvers hand back the type-65 RDATA in one of two shapes and we handle both:
+// resolvers hand back the type-65 rdata in one of two shapes and we handle both:
 //   1. presentation form  -> "1 . alpn=\"h3,h2\" ipv4hint=1.2.3.4 ech=AED+..."
-//      (dns.google, and Cloudflare when it knows the SVCB type)
-//   2. RFC 3597 generic    -> "\\# 63 00010000010003026832...0005004bfe0d..."
-//      (older resolvers / any resolver that treats HTTPS as an unknown type)
-// keeping both paths means the ech verdict is provider-agnostic — a fallback
+//      (dns.google, and cloudflare when it knows the svcb type)
+//   2. rfc 3597 generic    -> "\\# 63 00010000010003026832...0005004bfe0d..."
+//      (older resolvers / any resolver that treats https as an unknown type)
+// keeping both paths means the ech verdict is provider-agnostic - a fallback
 // resolver that only speaks generic format still yields a correct answer.
 #include "ech.h"
 
@@ -22,9 +22,9 @@ using std::vector;
 
 namespace {
 
-// ---- presentation-format helpers ------------------------------------------
+// presentation-format helpers
 
-// extract a SvcParam value from a presentation string: `key` is e.g. "ech=".
+// extract a svcparam value from a presentation string: `key` is e.g. "ech=".
 // handles quoted ("...") and bare (up-to-space) values. returns "" if absent.
 string svcparam(const string& s, const string& key) {
     // match key only at a token boundary (start or after whitespace) so
@@ -56,9 +56,9 @@ int b64_decoded_len(const string& b) {
     return (int)(sig * 3 / 4);
 }
 
-// ---- generic (RFC 3597) wire-format helpers -------------------------------
+// generic (rfc 3597) wire-format helpers
 
-// decode an ASCII hex string (whitespace tolerated) into bytes. returns false
+// decode an ascii hex string (whitespace tolerated) into bytes. returns false
 // on an odd number of nibbles or a stray non-hex symbol.
 bool hex_to_bytes(const string& hex, vector<uint8_t>& out) {
     int hi = -1;
@@ -77,22 +77,22 @@ bool hex_to_bytes(const string& hex, vector<uint8_t>& out) {
 
 uint16_t rd16(const uint8_t* p) { return (uint16_t)((p[0] << 8) | p[1]); }
 
-// parse binary SVCB/HTTPS RDATA (RFC 9460): SvcPriority(2) + TargetName +
-// SvcParams[(key:2, len:2, value:len)...]. fills the EchInfo fields we report.
+// parse binary svcb/https rdata (rfc 9460): svcpriority(2) + targetname +
+// svcparams[(key:2, len:2, value:len)...]. fills the EchInfo fields we report.
 EchInfo parse_wire(const vector<uint8_t>& b) {
     EchInfo e;
     size_t p = 0;
     if (b.size() < 3) return e;          // priority(2) + at least the root label
-    p += 2;                              // skip SvcPriority
-    // skip the TargetName: a sequence of length-prefixed labels ending in 0x00.
-    // SVCB RDATA forbids name compression, so a 0xC0-style pointer is malformed.
+    p += 2;                              // skip svcpriority
+    // skip the targetname: a sequence of length-prefixed labels ending in 0x00.
+    // svcb rdata forbids name compression, so a 0xC0-style pointer is malformed.
     while (p < b.size()) {
         uint8_t l = b[p];
         if (l == 0) { ++p; break; }
         if ((l & 0xC0) != 0) return e;   // compression pointer => bail
         p += 1 + (size_t)l;
     }
-    // walk the SvcParams
+    // walk the svcparams
     while (p + 4 <= b.size()) {
         uint16_t key = rd16(&b[p]);
         uint16_t vl  = rd16(&b[p + 2]);
@@ -142,7 +142,7 @@ EchInfo parse_wire(const vector<uint8_t>& b) {
                 e.ipv6hint = s;
                 break;
             }
-            case 5: {                    // ech: opaque ECHConfigList
+            case 5: {                    // ech: opaque echconfiglist
                 e.has_ech = vl > 0;
                 e.ech_len = vl;
                 break;
@@ -165,7 +165,7 @@ EchInfo ech_parse(const string& data) {
     size_t s = 0;
     while (s < data.size() && std::isspace((unsigned char)data[s])) ++s;
 
-    // RFC 3597 generic form: "\# <rdlen> <hex...>"
+    // rfc 3597 generic form: "\# <rdlen> <hex...>"
     if (s + 1 < data.size() && data[s] == '\\' && data[s + 1] == '#') {
         size_t p = s + 2;
         while (p < data.size() && std::isspace((unsigned char)data[p])) ++p;

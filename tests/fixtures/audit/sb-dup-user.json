@@ -1,0 +1,24 @@
+{
+  "inbounds": [
+    {
+      "type": "trojan",
+      "listen": "::",
+      "listen_port": 443,
+      "users": [
+        {
+          "name": "a",
+          "password": "p"
+        },
+        {
+          "name": "b",
+          "password": "p"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "certificate_path": "/x",
+        "key_path": "/y"
+      }
+    }
+  ]
+}

@@ -9,39 +9,36 @@ using std::string;
 namespace {
 
 // seed table. each entry is a (matcher, family, note) triple.
-//   match_kind 'F' = full JA4S string equality
-//   match_kind 'C' = JA4S_c (ext-hash) equality, cipher/alpn-agnostic
+//   match_kind 'f' = full ja4s string equality
+//   match_kind 'C' = ja4s_c (ext-hash) equality, cipher/alpn-agnostic
 //
 // only values actually observed by this project are listed. extend via
-// community-submitted scans, do not add guesses.
+// community-submitted scans, don't add guesses.
 struct SeedEntry {
-    char        kind;     // 'F' or 'C'
-    const char* key;      // full JA4S string, or just the ext-hash
+    char        kind;     // 'f' or 'C'
+    const char* key;      // full ja4s string, or just the ext-hash
     const char* family;
     const char* note;
 };
 
+// wire order, re-observed 2026-09-30 with tools/groundtruth/sh_order.py.
+// the old seeds were sorted hashes and never matched a wire-order ja4s.
 const SeedEntry SEED[] = {
-    // a56c5b993250 is the UNIVERSAL TLS 1.3 ServerHello ext-hash. a 1.3
-    // ServerHello exposes only supported_versions + key_share in the clear
-    // (ALPN and the rest move into EncryptedExtensions), so virtually every
-    // TLS-1.3 terminator hashes to this. confirmed byte-identical across
-    // Cloudflare, GitHub, Caddy and Microsoft in this project's own probes —
-    // i.e. it does NOT identify a stack. (earlier versions mislabeled it
-    // "cloudflare-edge"; corrected here so the classifier states the truth
-    // instead of over-claiming.)
+    // 002b,0033: github, caddyserver.com, www.microsoft.com, openssl 3.5
     {'C', "a56c5b993250", "tls13-generic-serverhello",
-        "universal TLS 1.3 ServerHello (supported_versions + key_share only; "
-        "ALPN rides in EncryptedExtensions) — identifies no specific stack; "
-        "seen identical on Cloudflare/GitHub/Caddy/Microsoft"},
+        "TLS 1.3 ServerHello, supported_versions then key_share; ALPN rides in "
+        "EncryptedExtensions. identifies no specific stack; observed on GitHub, "
+        "Caddy, Microsoft and OpenSSL 3.5"},
 
-    // c0bc851e483b: the classic 6-extension TLS 1.2 ServerHello of the
-    // OpenSSL/nginx family. observed on nginx.org and mail.ru. marks an
-    // OpenSSL-family terminator (nginx / HAProxy / stock OpenSSL) — a family,
-    // not one product.
-    {'C', "c0bc851e483b", "tls12-openssl-family",
-        "TLS 1.2 ServerHello with the 6-ext OpenSSL/nginx-family set "
-        "(observed on nginx.org, mail.ru) — an OpenSSL-family TLS terminator"},
+    // 0033,002b: www.cloudflare.com; one operator, not a family
+    {'C', "234ea6891581", "tls13-generic-serverhello",
+        "TLS 1.3 ServerHello, key_share then supported_versions. identifies no "
+        "specific stack; observed on Cloudflare"},
+
+    // ff01,0000,000b,0023,0010,0017: nginx.org and mail.ru over tls 1.2
+    {'C', "17136cd5846b", "tls12-openssl-family",
+        "TLS 1.2 ServerHello with the 6-extension OpenSSL/nginx set in OpenSSL "
+        "order (observed on nginx.org, mail.ru); a family, not one product"},
 };
 constexpr size_t SEED_N = sizeof(SEED) / sizeof(SEED[0]);
 
@@ -66,16 +63,16 @@ const char* version_text(int v) {
 }
 
 // coarse family guess from the structural fields when there is no exact
-// table hit. deliberately vague: this is a family band, not a stack name.
+// table hit. vague: this is a family band, not a stack name.
 //
-// the ServerHello extension count is the main lever:
-//   * a TLS 1.3 ServerHello carries supported_versions + key_share as a
-//     hard minimum (2). a 3rd extension is almost always ALPN.
+// the serverhello extension count is the main lever:
+//   * a tls 1.3 serverhello carries supported_versions + key_share as a
+//     hard minimum (2). a 3rd extension is almost always alpn.
 //   * <= 3 exts with no exotic entries is the common shape for both
-//     OpenSSL-family servers (nginx/haproxy) and Go crypto/tls servers
-//     (caddy / xray / sing-box). JA4S alone cannot split those two
+//     openssl-family servers (nginx/haproxy) and go crypto/tls servers
+//     (caddy / xray / sing-box). ja4s alone can't split those two
 //     without the reference ext-hash, so we say so honestly.
-//   * 4+ exts on a TLS 1.3 ServerHello is unusual and worth a note.
+//   * 4+ exts on a tls 1.3 serverhello is unusual and worth a note.
 string structural_family(int ver, int ext_count, const string& alpn) {
     if (ver == 0x0304) {
         if (ext_count <= 3) return "tls13-generic";

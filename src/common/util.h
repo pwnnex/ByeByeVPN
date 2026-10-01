@@ -18,12 +18,12 @@ std::string hex_s(const unsigned char* d, size_t n, bool spaces = false);
 std::string  ws2s(const wchar_t* w);
 std::wstring s2ws(const std::string& s);
 
-// dumb but bounded JSON-string scraper. NOT a real parser.
+// dumb but bounded json-string scraper. not a real parser.
 // returns the value of "<key>" if present, "" otherwise. accepts both
 // quoted strings and bare booleans/numbers (returns the literal text).
 std::string json_get_str(const std::string& body, const std::string& key);
 
-// case-insensitive substring check. needle must be ASCII.
+// case-insensitive substring check. needle must be ascii.
 bool icontains(const std::string& hay, const char* needle);
 
 // printable preview of bytes (escapes \r\n, dots for non-printables, lim cap).
@@ -32,24 +32,27 @@ std::string printable_prefix(const std::string& s, std::size_t lim = 80);
 // percentile over a vector<double>. sorts a copy.
 double percentile(std::vector<double> v, double pct);
 
-// MAC + sockaddr stringification (used by net + local modules)
+// mac + sockaddr stringification (used by net + local modules)
 std::string mac_to_str(const unsigned char* mac, int len);
 
-// case-insensitive DNS-name match with wildcard ("*.example.com") support.
+// ipv4 dotted quad or anything with a colon. rfc 6066 3: never an sni.
+bool is_ip_literal(const std::string& s);
+
+// case-insensitive dns-name match with wildcard ("*.example.com") support.
 bool dns_name_match(const std::string& name, const std::string& pat);
 
-// extract CN= from /C=US/.../CN=foo subject_oneline form.
+// extract cn= from /C=us/.../cn=foo subject_oneline form.
 std::string extract_cn(const std::string& subject_oneline);
 std::string extract_cn_from_subject(const std::string& subj);
 
 // stealth-mode timing jitter. sleeps a random duration in [min_ms, max_ms]
-// using OpenSSL RAND_bytes for the choice. NO-OP when g_stealth is off.
-// used between probes (J3, SNI consistency, uTLS, AmneziaWG sweep) so
+// using openssl RAND_bytes for the choice. no-op when g_stealth is off.
+// used between probes (j3, sni consistency, utls, amneziawg sweep) so
 // scanner-shaped bursts get smeared in time.
 void stealth_sleep_ms(int min_ms, int max_ms);
 
-// CSPRNG-backed Fisher-Yates shuffle for a vector<int> of indices. used by
-// the J3 probe-order randomizer and similar. no std::mt19937, no LCG.
+// csprng-backed fisher-yates shuffle for a vector<int> of indices. used by
+// the j3 probe-order randomizer and similar. no std::mt19937, no lcg.
 template <typename T>
 void crypto_shuffle(std::vector<T>& v) {
     void csprng_bytes(unsigned char* buf, int n);
@@ -64,6 +67,6 @@ void crypto_shuffle(std::vector<T>& v) {
     }
 }
 
-// expose the CSPRNG byte filler used by crypto_shuffle so the template can
+// expose the csprng byte filler used by crypto_shuffle so the template can
 // stay header-only without dragging in <openssl/rand.h>.
 void csprng_bytes(unsigned char* buf, int n);

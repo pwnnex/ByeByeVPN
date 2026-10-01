@@ -4,7 +4,7 @@
 #include "../src/common/tspu.h"
 
 TEST_CASE("looks_like_tspu_hop matches the mgmt-subnet last-octet bands") {
-    // 10.X.Y.Z with Z in [131..235] / [241..245] / 254 is the tspu layout.
+    // 10.x.y.z with z in [131..235] / [241..245] / 254 is the tspu layout.
     CHECK(looks_like_tspu_hop("10.1.2.131"));
     CHECK(looks_like_tspu_hop("10.1.2.235"));
     CHECK(looks_like_tspu_hop("10.99.99.241"));
@@ -19,7 +19,7 @@ TEST_CASE("looks_like_tspu_hop rejects out-of-band and non-10.* hops") {
     CHECK_FALSE(looks_like_tspu_hop("10.1.2.246"));   // just above band
     CHECK_FALSE(looks_like_tspu_hop("10.1.2.1"));     // low octet
     CHECK_FALSE(looks_like_tspu_hop("192.168.1.131"));// not 10.*
-    CHECK_FALSE(looks_like_tspu_hop("100.64.0.131")); // CGNAT, not 10.*
+    CHECK_FALSE(looks_like_tspu_hop("100.64.0.131")); // cgnat, not 10.*
     CHECK_FALSE(looks_like_tspu_hop(""));
     CHECK_FALSE(looks_like_tspu_hop("not-an-ip"));
     CHECK_FALSE(looks_like_tspu_hop("10.1.2.999"));   // octet overflow
@@ -41,7 +41,7 @@ TEST_CASE("looks_like_tspu_redirect matches operator warning markers") {
 TEST_CASE("looks_like_tspu_redirect rejects normal redirects") {
     CHECK(looks_like_tspu_redirect("https://example.com/login") == nullptr);
     CHECK(looks_like_tspu_redirect("") == nullptr);
-    // oversized Location values are rejected outright
+    // oversized location values are rejected outright
     std::string huge(600, 'a');
     CHECK(looks_like_tspu_redirect(huge) == nullptr);
 }

@@ -17,15 +17,15 @@ concern, etc.)? Report before disclosing publicly.
 
 ## In scope
 
-- `src/byebyevpn.cpp` and everything in the repo
+- the modular source tree under `src/` and everything in the repo
 - Release artifacts (exe + zip SHA256 on the release page)
 - Anything in the documented threat model below
 
 ## Out of scope
 
-- Bugs in third-party IP-intel services (ipapi.is, iplocate.io,
-  ip-api.com, ipwho.is, ipinfo.io, freeipapi.com, 2ip.me,
-  sypexgeo.net, crt.sh). Report those upstream.
+- Bugs in third-party services the tool queries (ipapi.is, iplocate.io,
+  freeipapi.com, ipwho.is, ipinfo.io, crt.sh, dns.google,
+  cloudflare-dns.com). Report those upstream.
 - General OpenSSL / Windows / msys2 CVEs, unless there's a specific
   exploitable path via this tool.
 - "Don't scan servers you don't own" - ethics/legal, not a security
@@ -42,14 +42,27 @@ Secondary: memory safety in parsers that consume attacker-controlled
 bytes (HTTP response parser, TLS parser, UDP reply decoder, JSON
 scanner).
 
+## Owner key material (`--wg-pubkey`, `--wg-key`, `--wg-psk`)
+
+The WireGuard self-check reads the peer private key and the preshared key
+from files only, so they never appear in argv or shell history; the server
+public key may be text or a file. Keys are parsed at use time, held in
+fixed arrays, wiped with `OPENSSL_cleanse` after the probe series, and
+never printed, saved or serialised: error messages name the path, JSON
+carries `wg_self_check.requested`, `ran` and `port`. The lab checks the
+saved results for every key string (0 hits on the 2026-10-01 runs). A handshake
+made with a peer key moves that peer's endpoint to the scanning machine on
+the server until the peer's own client sends again; `--help` and README
+say to use a spare peer.
+
 ## Known open threats
 
 These are known and tracked here; no need to report them.
 
 | Threat                                               | Status  | Plan                                                            |
 |------------------------------------------------------|---------|-----------------------------------------------------------------|
-| TLS JA3 != Chrome                                    | open    | Needs a uTLS-Chrome ClientHello port in C++ (large rewrite)     |
-| Behavioural burst: 9 IP-intel APIs hit in ~2s        | partial | Closed by `--stealth` / `--no-geoip`; still default-on          |
+| Synthetic hello is not a current Chrome (fixed order, no ML-KEM, no ECH GREASE); `tls_probe` is OpenSSL default | open | Documented as its own fingerprint in README |
+| Behavioural burst: 5 IP-intel APIs hit in ~2s        | partial | Closed by `--stealth` / `--no-geoip`; still default-on          |
 | Build not byte-reproducible across envs              | partial | CI workflow pins msys2; strip PE timestamp + build-id TODO      |
 | No Authenticode code signing                         | open    | EV cert needed (~$300/yr)                                       |
 | Unsigned git commits/tags                            | open    | GPG keys pending                                                |
@@ -58,16 +71,25 @@ These are known and tracked here; no need to report them.
 
 ## Recently closed
 
+- **`http_get()` sent `Accept-Encoding: gzip, deflate`** while the docs
+  said GET + Host only. The WinHTTP decompression option was the
+  source; it is gone. Captured on loopback the request is now
+  `GET`, `Connection: Keep-Alive` (added by WinHTTP) and `Host`, plus
+  `Accept: application/dns-json` on the Cloudflare DoH fallback only.
+- **ICMP traceroute sent 33 bytes** (`sizeof` counted the string
+  terminator) while claiming the 32-byte `ping.exe` payload. Now 32,
+  guarded by a `static_assert`.
+- **J3 invalid-SNI ClientHello was malformed**: 76 extension bytes
+  under a 65-byte header, so every TLS server answered decode_error.
+  The hello is now built with computed lengths and unit-tested.
+- **`dpi` treated a silent drop as a pass**: a dropped ClientHello next
+  to a working benign SNI printed "got a TLS reply" and exited 0.
 - **Chrome-131 header block was itself a fingerprint**
   ([#5](https://github.com/pwnnex/ByeByeVPN/issues/5)).
-  `http_get()` now sends **zero** tool-specific headers - no
-  `User-Agent`, no `Accept`, no `Accept-Language`, no
-  `Accept-Encoding`, no `Sec-Fetch-*`, no
-  `Upgrade-Insecure-Requests`. The WinHTTP session agent is empty
-  and `WINHTTP_OPTION_USER_AGENT` is force-overridden to empty to
-  cover WinHTTP defaults. `https_probe()` uses a minimal
-  `Host`+`Accept: */*`+`Connection: close` triple. IP-intel
-  endpoints all accept bare GETs (same as `curl -sS` without flags).
+  `http_get()` sends no tool-specific headers. The WinHTTP session
+  agent is empty and `WINHTTP_OPTION_USER_AGENT` is force-overridden
+  to empty. `https_probe()` uses a minimal
+  `Host`+`Accept: */*`+`Connection: close` triple.
 - **2ip.io HTML-scraping path triggered anti-bot**
   ([#5](https://github.com/pwnnex/ByeByeVPN/issues/5)). The provider
   now uses `api.2ip.me/geo.json` directly - a plain JSON endpoint.

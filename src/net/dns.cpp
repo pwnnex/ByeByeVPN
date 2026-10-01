@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "../common/winhdr.h"
 #include "dns.h"
 
 #include <algorithm>
@@ -29,7 +30,7 @@ Resolved resolve_host(const string& host) {
 
     // split by family; v4 first so primary_ip is never v6 on dual-stack
     // resolves. fixes the "works with IP, breaks with hostname" symptom on
-    // v4-only ISP connections common in RU/CIS where v6 silently times out.
+    // v4-only isp connections common in ru/cis where v6 silently times out.
     vector<string> v4_ips, v6_ips;
     for (auto* p = ai; p; p = p->ai_next) {
         string ip = sa_ip(p->ai_addr);

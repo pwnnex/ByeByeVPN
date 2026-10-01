@@ -17,25 +17,28 @@ using std::vector;
 namespace {
 
 struct ChResult {
-    bool progressed = false;   // got a TLS response (ServerHello / alert)
-    bool reset      = false;   // connection reset / closed before any TLS reply
+    bool connected  = false;
+    bool progressed = false;   // got a tls response (serverhello / alert)
+    bool reset      = false;   // connection reset / closed before any tls reply
+    bool silent     = false;   // no bytes, no reset, timed out
     int  reset_ms   = -1;
 };
 
-// open one TLS connection, send a real ClientHello carrying `sni`, and observe
-// whether the handshake gets a TLS response or an early RST. if `fragment`, the
-// ClientHello is split across two TCP segments inside the SNI string so a
-// stateless SNI-matcher can't see the whole hostname in one packet.
+// open one tls connection, send a real clienthello carrying `sni`, and observe
+// whether the handshake gets a tls response or an early RST. if `fragment`, the
+// clienthello is split across two tcp segments inside the sni string so a
+// stateless sni-matcher can't see the whole hostname in one packet.
 ChResult send_ch(const string& ip, int port, const string& sni, bool fragment, int to_ms) {
     ChResult r;
     string err;
     SOCKET s = tcp_connect(ip, port, to_ms, err);
     if (s == INVALID_SOCKET) return r;        // couldn't even connect
+    r.connected = true;
 
     int one = 1;
     setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (char*)&one, sizeof(one));
 
-    vector<uint8_t> rec = build_chrome131_clienthello(sni);
+    vector<uint8_t> rec = build_chromelike_clienthello(sni);
     auto t0 = std::chrono::steady_clock::now();
 
     if (fragment && rec.size() > 10) {
@@ -50,7 +53,7 @@ ChResult send_ch(const string& ip, int port, const string& sni, bool fragment, i
         if (split < 1) split = 1;
         if (split >= rec.size()) split = rec.size() - 1;
         send(s, (const char*)rec.data(), (int)split, 0);
-        Sleep(18);                              // force a distinct TCP segment
+        Sleep(18);                              // force a distinct tcp segment
         send(s, (const char*)rec.data() + split, (int)(rec.size() - split), 0);
     } else {
         send(s, (const char*)rec.data(), (int)rec.size(), 0);
@@ -64,22 +67,22 @@ ChResult send_ch(const string& ip, int port, const string& sni, bool fragment, i
                  std::chrono::steady_clock::now() - t0).count();
 
     if (n > 0) {
-        r.progressed = true;                    // a TLS reply means no SNI-RST
+        r.progressed = true;                    // a tls reply means no sni-RST
     } else if (n == 0) {
-        r.reset = true; r.reset_ms = dt;        // clean close with no TLS reply
+        r.reset = true; r.reset_ms = dt;        // clean close with no tls reply
     } else {
         int werr = WSAGetLastError();
         if (werr == WSAECONNRESET) { r.reset = true; r.reset_ms = dt; }
-        // WSAETIMEDOUT / other: no reply and no reset -> leave both false
+        else if (werr == WSAETIMEDOUT) r.silent = true;
     }
     closesocket(s);
     return r;
 }
 
-// a resolved address in a fake-IP / tunnel range means a VPN with fake-IP DNS
-// is active locally: traffic to it goes through the tunnel, not the raw ISP
-// path, so an SNI-RST test is meaningless. ranges: 198.18.0.0/15 (RFC 2544,
-// the sing-box / xray fake-IP default), 100.64.0.0/10 (CGNAT), 240.0.0.0/4.
+// a resolved address in a fake-ip / tunnel range means a vpn with fake-ip dns
+// is active locally: traffic to it goes through the tunnel, not the raw isp
+// path, so an sni-RST test is meaningless. ranges: 198.18.0.0/15 (rfc 2544,
+// the sing-box / xray fake-ip default), 100.64.0.0/10 (cgnat), 240.0.0.0/4.
 bool looks_like_fake_ip(const string& ip) {
     unsigned a = 0, b = 0;
     if (std::sscanf(ip.c_str(), "%u.%u", &a, &b) != 2) return false;
@@ -103,19 +106,24 @@ DpiProbe dpi_probe(const string& ip, int port, const string& sni, int to_ms) {
         return r;
     }
 
-    // baseline: a SNI that is never on a blocklist. its only job is to prove
-    // the IP:port itself accepts TLS, so any difference is SNI-specific.
+    // baseline: a sni that is never on a blocklist. its only job is to prove
+    // the ip:port itself accepts tls, so any difference is sni-specific.
     ChResult base = send_ch(ip, port, "www.example.com", false, to_ms);
-    r.benign_reset = base.reset; r.benign_progressed = base.progressed;
+    r.benign_connected = base.connected; r.benign_reset = base.reset;
+    r.benign_silent = base.silent; r.benign_progressed = base.progressed;
 
     ChResult tgt = send_ch(ip, port, sni, false, to_ms);
-    r.target_reset = tgt.reset; r.target_progressed = tgt.progressed; r.target_reset_ms = tgt.reset_ms;
+    r.target_connected = tgt.connected; r.target_reset = tgt.reset;
+    r.target_silent = tgt.silent; r.target_progressed = tgt.progressed;
+    r.target_reset_ms = tgt.reset_ms;
 
     if (tgt.reset && base.progressed) {
         r.sni_blocked = true;
         ChResult fr = send_ch(ip, port, sni, true, to_ms);
         r.frag_tested = true;
         r.frag_evades = fr.progressed && !fr.reset;
+    } else if (tgt.silent && base.progressed) {
+        r.sni_dropped = true;
     } else if (tgt.reset && base.reset) {
         r.ip_blocked = true;
     }
@@ -127,18 +135,32 @@ DpiProbe dpi_probe(const string& ip, int port, const string& sni, int to_ms) {
                  "you and the host (ISP / TSPU), not the host being down.";
         if (r.frag_tested)
             r.note += r.frag_evades
-                ? " fragmenting the ClientHello (split inside the hostname) EVADES it here — a "
-                  "Zapret / GoodbyeDPI style fragmentor, or a transport that fragments, gets you through."
-                : " fragmenting the ClientHello did NOT help (this DPI reassembles segments, or the "
-                  "host itself is resetting).";
+                ? " a ClientHello split inside the hostname got through here."
+                : " a ClientHello split inside the hostname was reset too (this DPI reassembles "
+                  "segments, or the host itself is resetting).";
+    } else if (r.sni_dropped) {
+        r.note = "SNI '" + sni + "': no reply and no reset within " + std::to_string(to_ms) +
+                 "ms after the ClientHello, while a benign SNI to the same IP:port got a TLS reply. "
+                 "the failure is SNI-specific: a silent drop on your path (ISP / TSPU), or a "
+                 "server that ignores this name.";
     } else if (r.ip_blocked) {
-        r.note = "both the target and a benign SNI reset to this IP — looks like an IP-level block "
+        r.note = "both the target and a benign SNI reset to this IP: an IP-level block "
                  "or a dead host, not SNI-specific filtering.";
-    } else if (!tgt.progressed && !base.progressed) {
-        r.note = "no TLS reply to either SNI (filtered / no route / timeout) — inconclusive.";
+    } else if (tgt.progressed) {
+        r.note = "SNI '" + sni + "' got a TLS reply: no SNI-specific RST or drop on the first "
+                 "flight. throttling or a freeze later in the connection is not measured.";
+    } else if (!tgt.connected) {
+        r.note = "TCP connect to " + ip + ":" + std::to_string(port) +
+                 " failed: IP or port level, the SNI was not tested. inconclusive.";
     } else {
-        r.note = "no SNI-based RST on your path for '" + sni +
-                 "' (the ClientHello reached the host and got a TLS reply).";
+        r.note = "no TLS reply to the target SNI and no working benign baseline. inconclusive.";
     }
     return r;
+}
+
+int dpi_exit_code(const DpiProbe& d) {
+    if (d.tunneled) return 64;
+    if (d.sni_blocked || d.sni_dropped) return 2;
+    if (d.target_progressed) return 0;
+    return 4;
 }

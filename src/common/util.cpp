@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "util.h"
 
-// most of this file is platform-agnostic string logic and is compiled
-// into the Linux unit-test / static-analysis CI build. only the wide-char
-// helpers + Sleep / RAND_bytes glue genuinely need the platform layer.
+// string helpers shared by the cli and tests
+// platform-specific conversions stay behind _WIN32
 #ifdef _WIN32
 #include "winhdr.h"
 #else
@@ -72,7 +71,7 @@ string hex_s(const unsigned char* d, size_t n, bool spaces) {
     return s;
 }
 
-// wide-char <-> utf-8 glue. only the Windows networking / adapter code
+// wide-char <-> utf-8 glue. only the windows networking / adapter code
 // uses these; on other platforms they are unreachable stubs that exist
 // purely so the file links in the cross-platform test build.
 #ifdef _WIN32
@@ -97,13 +96,30 @@ string      ws2s(const wchar_t*) { return {}; }
 std::wstring s2ws(const string&) { return {}; }
 #endif
 
+// grab a scalar by key from geoip json
+// check both sides of the token so a value like "asn" can't pass as a key
+// not a full json parser; objects and arrays return an empty string
 string json_get_str(const string& body, const string& key) {
     string pat = "\"" + key + "\"";
     size_t p = 0;
     while ((p = body.find(pat, p)) != string::npos) {
+        // left side: the nearest non-space char before the token must open an
+        // object or separate members, otherwise this is a value, not a key.
+        size_t b = p;
+        while (b > 0 && std::isspace((unsigned char)body[b - 1])) --b;
+        bool key_position = (b > 0 && (body[b - 1] == '{' || body[b - 1] == ','));
+        if (!key_position) { p += pat.size(); continue; }
+
+        // right side: optional whitespace, then the ':' separator.
         size_t q = p + pat.size();
-        while (q < body.size() && (body[q] == ' ' || body[q] == ':' || body[q] == '\t')) ++q;
+        while (q < body.size() && (body[q] == ' ' || body[q] == '\t')) ++q;
+        if (q >= body.size() || body[q] != ':') { p += pat.size(); continue; }
+        ++q;
+        // a pretty-printer is allowed to put the value on the next line, so
+        // skip every kind of whitespace here, not just spaces and tabs.
+        while (q < body.size() && std::isspace((unsigned char)body[q])) ++q;
         if (q >= body.size()) return {};
+
         if (body[q] == '"') {
             size_t e = q + 1;
             string v;
@@ -112,11 +128,16 @@ string json_get_str(const string& body, const string& key) {
                 else { v += body[e]; ++e; }
             }
             return v;
-        } else {
-            size_t e = q;
-            while (e < body.size() && body[e] != ',' && body[e] != '}' && body[e] != '\n') ++e;
-            return trim(body.substr(q, e - q));
         }
+        // a nested object/array has no scalar text to hand back. the bare scan
+        // below would have chopped it at the first ',' and returned a shard
+        // like `{"asn":13335` - ipapi.is, whose "asn" is an object, hit exactly
+        // that on its fallback path. report "absent" instead; callers that want
+        // the inner fields already slice the sub-object out first.
+        if (body[q] == '{' || body[q] == '[') return {};
+        size_t e = q;
+        while (e < body.size() && body[e] != ',' && body[e] != '}' && body[e] != '\n') ++e;
+        return trim(body.substr(q, e - q));
     }
     return {};
 }
@@ -171,6 +192,17 @@ string mac_to_str(const unsigned char* mac, int len) {
     return buf;
 }
 
+bool is_ip_literal(const string& s) {
+    if (s.empty()) return false;
+    if (s.find(':') != string::npos) return true;
+    int dots = 0;
+    for (unsigned char c : s) {
+        if (c == '.') ++dots;
+        else if (!std::isdigit(c)) return false;
+    }
+    return dots == 3;
+}
+
 bool dns_name_match(const string& name, const string& pat) {
     if (name.empty() || pat.empty()) return false;
     if (pat.size() > 2 && pat[0] == '*' && pat[1] == '.') {
@@ -199,7 +231,7 @@ string extract_cn_from_subject(const string& subj) {
     return subj.substr(p, e == string::npos ? string::npos : e - p);
 }
 
-// shared CSPRNG byte filler — tiny wrapper so callers don't have to pull in
+// shared csprng byte filler - tiny wrapper so callers don't have to pull in
 // <openssl/rand.h> just to seed a shuffle.
 void csprng_bytes(unsigned char* buf, int n) { RAND_bytes(buf, n); }
 

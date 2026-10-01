@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// pretty-print helpers for the scan banner and per-provider GeoIP lines.
+// pretty-print helpers for the scan banner and per-provider geoip lines.
 #pragma once
 
 #include "../geoip/geoip.h"

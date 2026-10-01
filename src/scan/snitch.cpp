@@ -15,9 +15,9 @@
 using std::string;
 using std::vector;
 
-// physical RTT bands per ISO 3166-1 alpha-2 country, calibrated for a
-// RU/EU observer (the typical user vantage point). fiber light-speed is
-// ~200,000 km/s — Moscow→Frankfurt 2000km is ~10ms one-way ~20ms RTT min.
+// physical rtt bands per iso 3166-1 alpha-2 country, calibrated for a
+// ru/eu observer (the typical user vantage point). fiber light-speed is
+// ~200,000 km/s - moscow→frankfurt 2000km is ~10ms one-way ~20ms rtt min.
 namespace {
 struct RttRange { const char* cc; double min_ms; double max_ms; };
 const RttRange RTT_TABLE[] = {
@@ -115,9 +115,9 @@ SnitchResult snitch_check(const string& target_ip, int target_port, const string
     r.expected_min_ms = emin;
 
     // observer's local floor: the nearest of the three anchors. you physically
-    // cannot reach ANY real remote server faster than your own nearest major-
-    // network pop, so this is a vantage-INDEPENDENT yardstick (works the same
-    // from Moscow, Vladivostok, or anywhere).
+    // can't reach any real remote server faster than your own nearest major-
+    // network pop, so this is a vantage-independent yardstick (works the same
+    // from moscow, vladivostok, or anywhere).
     double anchor_min = std::min({
         r.cf_median_ms     > 0 ? r.cf_median_ms     : 9e9,
         r.google_median_ms > 0 ? r.google_median_ms : 9e9,
@@ -125,23 +125,23 @@ SnitchResult snitch_check(const string& target_ip, int target_port, const string
     });
     bool have_anchor = anchor_min > 0 && anchor_min < 9e9;
 
-    // the per-country RTT_TABLE bands are calibrated for a Moscow/EU observer.
-    // only trust those ABSOLUTE bands when the observer actually looks Moscow/
-    // EU-ish (low RTT to the Moscow Yandex anchor). a user elsewhere (e.g. RU
-    // far-east, where Tokyo is ~45ms not ~150ms) would otherwise get a false
+    // the per-country RTT_TABLE bands are calibrated for a moscow/eu observer.
+    // only trust those absolute bands when the observer actually looks moscow/
+    // eu-ish (low rtt to the moscow yandex anchor). a user elsewhere (e.g. ru
+    // far-east, where tokyo is ~45ms not ~150ms) would otherwise get a false
     // "impossibly low" hit (issue #10).
     bool observer_eu_like = (r.yandex_median_ms > 0 && r.yandex_median_ms < 50.0);
 
-    // PRIMARY anycast/proxy tell, vantage-independent: the target answers at or
-    // below your nearest-anchor floor, i.e. it cannot really be in the far-away
-    // country GeoIP claims — it's an anycast/CDN front or a local middlebox.
+    // primary anycast/proxy tell, vantage-independent: the target answers at or
+    // below your nearest-anchor floor, i.e. it can't really be in the far-away
+    // country geoip claims - it's an anycast/cdn front or a local middlebox.
     bool anycast_like = have_anchor && r.median_ms > 0 &&
                         (r.median_ms < anchor_min * 0.9 || r.median_ms < 3.0);
 
     if (anycast_like) {
         r.too_low = true;
     } else if (observer_eu_like && emin > 0 && r.median_ms < emin * 0.5) {
-        r.too_low = true;            // band-based, ONLY from a Moscow/EU vantage
+        r.too_low = true;            // band-based, only from a moscow/eu vantage
     }
     if (observer_eu_like && emax > 0 && r.median_ms > emax * 3.0) r.too_high = true;
 
@@ -152,35 +152,43 @@ SnitchResult snitch_check(const string& target_ip, int target_port, const string
         if (observer_eu_like && emax > 0 && emax < 80.0 && ratio > 4.0) r.anchor_ratio_off = true;
         if (observer_eu_like && emin > 0 && emin > 60.0 && r.median_ms < anchor_min * 0.8) r.anchor_ratio_off = true;
     }
+    // no country, no band to compare against
+    if (country_code.empty()) { r.too_high = false; r.anchor_ratio_off = false; }
     r.ok = true;
     {
+        // observation first; causes stay unverified, reference only
         char buf[320];
         if (r.too_low && anycast_like)
             std::snprintf(buf, sizeof(buf),
-                "median %.1fms is at/under your nearest-anchor floor %.0fms — target answers faster than a real server in %s could (anycast/CDN front OR GeoIP lies)",
-                r.median_ms, anchor_min, country_code.c_str());
+                "median %.1fms is at or under your nearest anchor (%.0fms); the target is closer than any anchor "
+                "(same network, anycast front or a middlebox), cause unverified",
+                r.median_ms, anchor_min);
         else if (r.too_low)
             std::snprintf(buf, sizeof(buf),
-                "median %.1fms but %s geo implies >=%.0fms from a Moscow/EU vantage — impossibly low (GeoIP lies OR anycast proxy)",
-                r.median_ms, country_code.c_str(), emin);
+                "median %.1fms is under half the %.0fms band for %s from a Moscow/EU vantage; GeoIP and path disagree, cause unverified",
+                r.median_ms, emin, country_code.c_str());
         else if (r.too_high)
             std::snprintf(buf, sizeof(buf),
-                "median %.1fms is >3x the normal %.0fms band for %s (Moscow/EU vantage) — extra hops in path (tunnel / long middlebox chain)",
+                "median %.1fms is over 3x the %.0fms band for %s from a Moscow/EU vantage; longer path than expected, cause unverified",
                 r.median_ms, emax, country_code.c_str());
         else if (r.high_jitter)
             std::snprintf(buf, sizeof(buf),
-                "stddev %.1fms over %d samples — high jitter typical of tunnel queue/encryption overhead",
+                "stddev %.1fms over %d samples; queueing, congestion or tunnels on either side, cause unverified",
                 r.stddev_ms, r.samples);
         else if (r.anchor_ratio_off)
             std::snprintf(buf, sizeof(buf),
-                "target RTT doesn't match closest anchor ratio — location doesn't add up");
+                "target RTT does not fit the anchor ratio expected for %s; cause unverified", country_code.c_str());
+        else if (country_code.empty())
+            std::snprintf(buf, sizeof(buf),
+                "RTT %.1fms (min %.1f, stddev %.1f); no country reference, nothing compared",
+                r.median_ms, r.min_ms, r.stddev_ms);
         else if (!observer_eu_like && range)
             std::snprintf(buf, sizeof(buf),
-                "RTT %.1fms (min %.1f, nearest anchor %.0fms) — consistent; country RTT bands skipped (you are not on a Moscow/EU vantage, so absolute %s bands don't apply)",
-                r.median_ms, r.min_ms, anchor_min, country_code.c_str());
+                "RTT %.1fms (min %.1f, nearest anchor %.0fms); country bands skipped, they assume a Moscow/EU vantage",
+                r.median_ms, r.min_ms, anchor_min);
         else
             std::snprintf(buf, sizeof(buf),
-                "RTT %.1fms (min %.1f, stddev %.1f) — consistent with %s geolocation",
+                "RTT %.1fms (min %.1f, stddev %.1f); within the band for %s",
                 r.median_ms, r.min_ms, r.stddev_ms, country_code.c_str());
         r.summary = buf;
     }

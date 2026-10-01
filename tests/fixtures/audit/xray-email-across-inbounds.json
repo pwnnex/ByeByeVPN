@@ -1,0 +1,70 @@
+{
+  "inbounds": [
+    {
+      "protocol": "vless",
+      "port": 443,
+      "settings": {
+        "decryption": "none",
+        "clients": [
+          {
+            "id": "5f2e1a44-7d1c-4c6a-9b36-2a8c1e0f9d11",
+            "flow": "xtls-rprx-vision",
+            "email": "alice@x"
+          }
+        ],
+        "fallbacks": [
+          {
+            "dest": 8080
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "target": "example.com:443",
+          "serverNames": [
+            "example.com"
+          ],
+          "privateKey": "x",
+          "shortIds": [
+            "0123abcd"
+          ]
+        }
+      }
+    },
+    {
+      "protocol": "vless",
+      "port": 8443,
+      "settings": {
+        "decryption": "none",
+        "clients": [
+          {
+            "id": "0b8f1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d",
+            "flow": "xtls-rprx-vision",
+            "email": "alice@x"
+          }
+        ],
+        "fallbacks": [
+          {
+            "dest": 8080
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "target": "example.com:443",
+          "serverNames": [
+            "example.com"
+          ],
+          "privateKey": "x",
+          "shortIds": [
+            "0123abcd"
+          ]
+        }
+      }
+    }
+  ]
+}

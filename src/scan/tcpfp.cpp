@@ -15,7 +15,7 @@ using std::vector;
 
 namespace {
 
-// SIO_TCP_INFO is exposed since Windows 10 1703. struct is TCP_INFO_v0.
+// SIO_TCP_INFO is exposed since windows 10 1703. struct is tcp_info_v0.
 // version 0 fields:
 //   State, Mss, ConnectionTimeMs, TimestampsEnabled,
 //   RttUs, MinRttUs, BytesInFlight,
@@ -69,36 +69,11 @@ double stddev(const vector<double>& v) {
     return std::sqrt(s / v.size());
 }
 
-// classify the OS based on collected signals. coarse, no false certainty.
-string classify_os(const TcpFp& f) {
-    // peer_window heuristics on top of stddev / MSS:
-    //   linux 5.x nginx: SndWnd often 64240 (or 64K), MSS 1460
-    //   windows server 2022 IIS: SndWnd 65535, MSS 1460
-    //   go runtime (xray default): SndWnd 65535 with wscale 10, MSS 1460
-    //   bsd / openbsd: SndWnd 65535, different ts behavior
-    if (f.peer_window <= 0 || f.peer_mss <= 0) {
-        if (f.handshake_stddev_ms > 30.0 && f.handshake_median_ms < 200.0) {
-            return "userspace-stack-like (high handshake variance, possible TUN/usermode TCP)";
-        }
-        return "unknown (insufficient signals)";
-    }
-    bool tight = f.handshake_stddev_ms < f.handshake_median_ms * 0.10;
-    if (f.peer_window >= 64000 && f.peer_window <= 64512 && f.peer_mss == 1460 && tight) {
-        return "linux 5.x kernel stack (nginx / openssh / haproxy class)";
-    }
-    if (f.peer_window == 65535 && f.peer_mss == 1460 && tight) {
-        return "windows server / go-runtime stack (cannot disambiguate without raw SYN)";
-    }
-    if (f.peer_window > 65535) {
-        return "wscale-aware modern stack (linux 6.x / freebsd / windows 11)";
-    }
-    if (f.handshake_stddev_ms > 30.0) {
-        return "userspace-stack-like (high handshake variance, possible TUN/usermode TCP)";
-    }
-    return "generic kernel-stack (no specific stack signature)";
-}
+// no os guess: 0 of 9 windows lab stands classified as windows,
+// window and jitter mostly describe our own path
+const char* const OS_NOT_ESTIMATED = "not estimated (no validated model; see docs/SIGNALS.md#tcp-stack)";
 
-// one TCP handshake timed in microseconds, returns ms as double. -1 on fail.
+// one tcp handshake timed in microseconds, returns ms as double. -1 on fail.
 double timed_connect(const string& host, int port, int to_ms) {
     auto t0 = std::chrono::steady_clock::now();
     string err;
@@ -121,17 +96,18 @@ bool snapshot_tcp_info(const string& host, int port, int to_ms, TCP_INFO_v0_loca
     return rc == 0 && bytesRet >= sizeof(unsigned int) * 4;
 }
 
-// closed-port behavior. returns ms-to-RST or -1 on timeout.
+// closed-port behavior. ms-to-rst, -1 timeout, -2 open, -3 unreachable, -4 other
 int closed_port_probe(const string& host, int port, int to_ms) {
     auto t0 = std::chrono::steady_clock::now();
     string err;
     SOCKET s = tcp_connect(host, port, to_ms, err);
     auto t1 = std::chrono::steady_clock::now();
-    if (s != INVALID_SOCKET) { closesocket(s); return -2; /* unexpectedly open */ }
+    if (s != INVALID_SOCKET) { closesocket(s); return -2; }
     int dt = (int)std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
-    if (err == "refused")      return dt;          // got RST
-    if (err == "timeout")      return -1;          // dropped
-    return -1;
+    if (err == "refused")     return dt;
+    if (err == "timeout")     return -1;
+    if (err == "unreachable") return -3;
+    return -4;
 }
 
 } // namespace
@@ -164,7 +140,7 @@ TcpFp tcp_fingerprint(const string& ip, int open_port, int closed_port_hint) {
     f.handshake_stddev_ms = stddev(samples);
     f.bimodal = f.handshake_stddev_ms > 0.5 * f.handshake_median_ms;
 
-    // 2) peer window + MSS via SIO_TCP_INFO
+    // 2) peer window + mss via SIO_TCP_INFO
     TCP_INFO_v0_local info{};
     if (snapshot_tcp_info(ip, open_port, 2000, info)) {
         f.tcp_info_ok = true;
@@ -176,14 +152,21 @@ TcpFp tcp_fingerprint(const string& ip, int open_port, int closed_port_hint) {
     if (closed_port_hint > 0 && closed_port_hint <= 65535) {
         int dt = closed_port_probe(ip, closed_port_hint, 1500);
         if (dt == -1) {
-            f.closed_port_behavior = "drop";
+            // silence is not a drop policy until the path is known good
+            f.closed_port_behavior = "no answer in 1500 ms";
             f.closed_port_rtt_ms   = -1;
         } else if (dt == -2) {
             f.closed_port_behavior = "n/a (port unexpectedly open)";
             f.closed_port_rtt_ms   = -1;
+        } else if (dt == -3) {
+            f.closed_port_behavior = "icmp unreachable";
+            f.closed_port_rtt_ms   = -1;
+        } else if (dt == -4) {
+            f.closed_port_behavior = "connect error";
+            f.closed_port_rtt_ms   = -1;
         } else {
             f.closed_port_rtt_ms = dt;
-            // anchor against handshake_min_ms: a RST within 2x of one-way RTT
+            // anchor against handshake_min_ms: a RST within 2x of one-way rtt
             // is "fast" (kernel emits it); slower is firewall in path.
             if (dt <= (int)(f.handshake_min_ms * 2 + 5)) f.closed_port_behavior = "rst-fast";
             else                                          f.closed_port_behavior = "rst-slow";
@@ -192,14 +175,14 @@ TcpFp tcp_fingerprint(const string& ip, int open_port, int closed_port_hint) {
         f.closed_port_behavior = "n/a";
     }
 
-    // 4) ISN delta variance via SIO_TCP_INFO (no SYN-ACK ISN exposed by win stack;
-    //    use the local-side SEQ from BytesOut window after handshake as a coarse
+    // 4) isn delta variance via SIO_TCP_INFO (no syn-ack isn exposed by win stack;
+    //    use the local-side seq from BytesOut window after handshake as a coarse
     //    proxy. limited but cheap.)
-    //    skipped in this minimal impl: would need raw SYN to capture peer ISN.
+    //    skipped in this minimal impl: would need raw syn to capture peer isn.
     f.isn_samples = 0;
     f.isn_delta_stddev = 0.0;
 
-    f.os_guess = classify_os(f);
+    f.os_guess = OS_NOT_ESTIMATED;
     f.ok = true;
     return f;
 }

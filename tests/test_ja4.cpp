@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// unit tests for src/scan/ja4.cpp (byte parsers + JA4 builders) and
-// src/scan/ja4s_db.cpp (JA4S classifier).
+// unit tests for src/scan/ja4.cpp (byte parsers + ja4 builders) and
+// src/scan/ja4s_db.cpp (ja4s classifier).
 #include "doctest.h"
 #include "../src/scan/ja4.h"
 #include "../src/scan/ja4s_db.h"
@@ -11,9 +11,9 @@
 
 using std::vector;
 
-// build a minimal but well-formed TLS 1.3 ClientHello handshake message,
+// build a minimal but well-formed tls 1.3 clienthello handshake message,
 // as SSL_set_msg_callback would hand it to parse_client_hello: it starts
-// at the HandshakeType byte, then a uint24 length, then the body.
+// at the handshaketype byte, then a uint24 length, then the body.
 static vector<uint8_t> make_client_hello() {
     vector<uint8_t> body;
     auto u16 = [&](uint16_t v){ body.push_back(v >> 8); body.push_back(v & 0xff); };
@@ -31,7 +31,7 @@ static vector<uint8_t> make_client_hello() {
     // extensions
     vector<uint8_t> ext;
     auto eu16 = [&](uint16_t v){ ext.push_back(v >> 8); ext.push_back(v & 0xff); };
-    // SNI (0x0000): server_name_list { host_name(0) "ab" }
+    // sni (0x0000): server_name_list { host_name(0) "ab" }
     eu16(0x0000); eu16(7);                // ext type, ext len
     eu16(5);                              // server_name_list len
     ext.push_back(0);                     // name type host_name
@@ -39,7 +39,7 @@ static vector<uint8_t> make_client_hello() {
     // supported_versions (0x002b): list = [0x0304]
     eu16(0x002b); eu16(3);
     ext.push_back(2); eu16(0x0304);
-    // ALPN (0x0010): list = ["h2"]
+    // alpn (0x0010): list = ["h2"]
     eu16(0x0010); eu16(5);
     eu16(3);                              // alpn protocol list length
     ext.push_back(2); ext.push_back('h'); ext.push_back('2');
@@ -50,7 +50,7 @@ static vector<uint8_t> make_client_hello() {
     u16((uint16_t)ext.size());
     body.insert(body.end(), ext.begin(), ext.end());
 
-    // wrap: HandshakeType(1) + uint24 length + body
+    // wrap: handshaketype(1) + uint24 length + body
     vector<uint8_t> msg;
     msg.push_back(0x01);
     msg.push_back((body.size() >> 16) & 0xff);
@@ -125,7 +125,7 @@ TEST_CASE("parse_client_hello rejects truncated / wrong-type input") {
     CHECK_FALSE(parse_client_hello(nullptr, 0, ch));
     uint8_t tiny[] = {0x01, 0x00};
     CHECK_FALSE(parse_client_hello(tiny, sizeof(tiny), ch));
-    // a ServerHello (type 0x02) must not parse as a ClientHello
+    // a serverhello (type 0x02) must not parse as a clienthello
     auto sh = make_server_hello();
     CHECK_FALSE(parse_client_hello(sh.data(), sh.size(), ch));
     // claimed length longer than the buffer
@@ -138,7 +138,7 @@ TEST_CASE("ja4_client builds the canonical t..._..._... shape") {
     ClientHelloFp ch;
     REQUIRE(parse_client_hello(msg.data(), msg.size(), ch));
     std::string ja4 = ja4_client(ch);
-    // a-part: t + 13 + d (SNI present) + 02 ciphers + 04 exts + h2
+    // a-part: t + 13 + d (sni present) + 02 ciphers + 04 exts + h2
     CHECK(ja4.rfind("t13d0204h2_", 0) == 0);
     // total shape: 10-char header + "_" + 12 + "_" + 12
     CHECK(ja4.size() == 10 + 1 + 12 + 1 + 12);
@@ -157,30 +157,92 @@ TEST_CASE("parse_server_hello + ja4s_server") {
     CHECK(sh.real_version == 0x0304);
     CHECK(sh.extensions.size() == 2);
     std::string ja4s = ja4s_server(sh);
-    // a-part: t + 13 + 02 exts + 00 (no ALPN) ; b-part: cipher 1302
+    // a-part: t + 13 + 02 exts + 00 (no alpn) ; b-part: cipher 1302
     CHECK(ja4s.rfind("t130200_1302_", 0) == 0);
 }
 
+// foxio technical_details/JA4.md example, sorted raw form
+TEST_CASE("ja4 matches the foxio published vector") {
+    CHECK(sha256_12("002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,cca9")
+          == "8daaf6152771");
+    CHECK(sha256_12("0005,000a,000b,000d,0012,0015,0017,001b,0023,002b,002d,0033,4469,ff01"
+                    "_0403,0804,0401,0503,0805,0501,0806,0601") == "e5627efa2ab1");
+    auto rec = build_chromelike_clienthello("example.com");
+    ClientHelloFp ch;
+    REQUIRE(parse_client_hello(rec.data() + 5, rec.size() - 5, ch));
+    CHECK(ja4_client(ch) == "t13d1516h2_8daaf6152771_e5627efa2ab1");
+}
+
+TEST_CASE("ja4 alpn takes first and last character") {
+    ClientHelloFp ch;
+    ch.ok = true; ch.real_version = 0x0304; ch.has_sni = true;
+    ch.ciphers = {0x1301}; ch.extensions = {0x0000, 0x0010};
+    auto alpn_of = [&](const std::string& a) { ch.alpn_first = a; return ja4_client(ch).substr(8, 2); };
+    CHECK(alpn_of("h2") == "h2");
+    CHECK(alpn_of("http/1.1") == "h1");
+    CHECK(alpn_of("h3") == "h3");
+    CHECK(alpn_of("x") == "xx");
+    CHECK(alpn_of("") == "00");
+    CHECK(alpn_of(std::string("\xab\xcd", 2)) == "ad");
+    CHECK(alpn_of(std::string("a\xcd", 2)) == "6d");
+
+    ClientHelloFp none;
+    none.ok = true; none.real_version = 0x0303;
+    CHECK(ja4_client(none).rfind("t12i000000_000000000000_", 0) == 0);
+}
+
+TEST_CASE("ja4s keeps wire order and first/last alpn") {
+    ServerHelloFp a;
+    a.ok = true; a.real_version = 0x0304; a.cipher = 0x1301;
+    a.extensions = {0x002b, 0x0033};
+    ServerHelloFp b = a;
+    b.extensions = {0x0033, 0x002b};
+    CHECK(ja4s_server(a) == "t130200_1301_" + sha256_12("002b,0033"));
+    CHECK(ja4s_server(b) == "t130200_1301_" + sha256_12("0033,002b"));
+    CHECK(ja4s_server(a) != ja4s_server(b));
+
+    ServerHelloFp t12;
+    t12.ok = true; t12.legacy_version = 0x0303; t12.cipher = 0xc02f;
+    t12.extensions = {0xff01, 0x000b, 0x0010};
+    t12.alpn_negotiated = "http/1.1";
+    CHECK(ja4s_server(t12) == "t1203h1_c02f_" + sha256_12("ff01,000b,0010"));
+}
+
+TEST_CASE("ja4h accept-language is four characters") {
+    Ja4hInput in;
+    in.method = "GET"; in.http_version = "1.1";
+    in.header_names_in_order = {"Host", "Accept", "Accept-Language"};
+    auto a_part = [&](const std::string& lang) { in.accept_language = lang; return ja4h(in).substr(0, 12); };
+    CHECK(a_part("en-US,en;q=0.9") == "ge11nn03enus");
+    CHECK(a_part("ru") == "ge11nn03ru00");
+    CHECK(a_part("") == "ge11nn030000");
+    CHECK(a_part("de;q=0.8") == "ge11nn03de00");
+    CHECK(ja4h(in).size() == 12 + 1 + 12 + 1 + 12 + 1 + 12);
+}
+
 TEST_CASE("ja4s_classify: exact seed hit vs structural fallback") {
-    // exact: the universal TLS 1.3 ServerHello ext-hash (corrected from the
-    // old "cloudflare-edge" mislabel — proven non-distinctive across
-    // Cloudflare/GitHub/Caddy/Microsoft, so it names no specific stack).
-    Ja4sInfo cf = ja4s_classify("t130200_1301_a56c5b993250");
+    // wire-order hashes from sh_order.py, 2026-09-30
+    Ja4sInfo gh = ja4s_classify("t130200_1301_a56c5b993250");
+    CHECK(gh.confidence == "exact");
+    CHECK(gh.family == "tls13-generic-serverhello");
+    Ja4sInfo cf = ja4s_classify("t130200_1301_234ea6891581");
     CHECK(cf.confidence == "exact");
     CHECK(cf.family == "tls13-generic-serverhello");
 
-    // exact: the observed TLS 1.2 OpenSSL/nginx-family ext-hash.
-    Ja4sInfo ng = ja4s_classify("t1206h2_c030_c0bc851e483b");
+    Ja4sInfo ng = ja4s_classify("t1206h2_c030_17136cd5846b");
     CHECK(ng.confidence == "exact");
     CHECK(ng.family == "tls12-openssl-family");
 
-    // structural: unknown ext-hash, valid TLS 1.3 shape -> generic family
+    // the old sorted-order seed must no longer match anything
+    CHECK(ja4s_classify("t1206h2_c030_c0bc851e483b").confidence == "structural");
+
+    // structural: unknown ext-hash, valid tls 1.3 shape -> generic family
     Ja4sInfo st = ja4s_classify("t130203h2_1302_ffffffffffff");
     CHECK(st.confidence == "structural");
     CHECK(st.tls_version == 0x0304);
     CHECK(st.ok);
 
-    // structural: a multi-ext TLS 1.2 ServerHello -> openssl-family band
+    // structural: a multi-ext tls 1.2 serverhello -> openssl-family band
     Ja4sInfo t12 = ja4s_classify("t1206h2_c030_aaaaaaaaaaaa");
     CHECK(t12.confidence == "structural");
     CHECK(t12.tls_version == 0x0303);
@@ -193,10 +255,40 @@ TEST_CASE("ja4s_classify: exact seed hit vs structural fallback") {
     CHECK(empty.confidence == "unknown");
 }
 
-TEST_CASE("build_chrome131_clienthello is a well-formed Chrome ClientHello") {
-    auto rec = build_chrome131_clienthello("example.com");
+// j3 invalid-sni probe sent 76 ext bytes under a 65 header
+TEST_CASE("build_minimal_clienthello lengths are self-consistent") {
+    for (const char* sni : {"abc.invalid", "x.invalid", "averyveryverylonglabel.invalid"}) {
+        auto rec = build_minimal_clienthello(sni);
+        REQUIRE(rec.size() > 9);
+        CHECK(rec[0] == 0x16);
+        const size_t rec_len = ((size_t)rec[3] << 8) | rec[4];
+        CHECK(rec_len == rec.size() - 5);
+        CHECK(rec[5] == 0x01);
+        const size_t hs_len = ((size_t)rec[6] << 16) | ((size_t)rec[7] << 8) | rec[8];
+        CHECK(hs_len == rec.size() - 9);
+        // 2 ver + 32 random + 1 sid + 2+2 suites + 2 comp
+        const size_t ext_at = 9 + 2 + 32 + 1 + 4 + 2;
+        const size_t ext_len = ((size_t)rec[ext_at] << 8) | rec[ext_at + 1];
+        CHECK(ext_len == rec.size() - ext_at - 2);
 
-    // TLS plaintext record header: handshake (0x16), legacy version 0x0301.
+        ClientHelloFp ch;
+        REQUIRE(parse_client_hello(rec.data() + 5, rec.size() - 5, ch));
+        CHECK(ch.sni == sni);
+        CHECK(ch.alpn_first == "http/1.1");
+        CHECK(ch.real_version == 0x0304);
+        REQUIRE(ch.ciphers.size() == 1);
+        CHECK(ch.ciphers[0] == 0x1302);
+        CHECK(ch.extensions.size() == 7);
+    }
+    // 11-char sni: 128 bytes on the wire
+    CHECK(build_minimal_clienthello("abc.invalid").size() == 128);
+    CHECK(build_minimal_clienthello("abc.invalid") != build_minimal_clienthello("abc.invalid"));
+}
+
+TEST_CASE("build_chromelike_clienthello is a well-formed ClientHello") {
+    auto rec = build_chromelike_clienthello("example.com");
+
+    // tls plaintext record header: handshake (0x16), legacy version 0x0301.
     REQUIRE(rec.size() > 5);
     CHECK(rec[0] == 0x16);
     CHECK(rec[1] == 0x03);
@@ -204,10 +296,10 @@ TEST_CASE("build_chrome131_clienthello is a well-formed Chrome ClientHello") {
     size_t rec_len = ((size_t)rec[3] << 8) | rec[4];
     CHECK(rec_len == rec.size() - 5);
 
-    // the handshake message (record payload) must parse as a ClientHello.
+    // the handshake message (record payload) must parse as a clienthello.
     const uint8_t* hs = rec.data() + 5;
     size_t hs_len = rec.size() - 5;
-    CHECK(hs[0] == 0x01);  // HandshakeType client_hello
+    CHECK(hs[0] == 0x01);  // handshaketype client_hello
 
     ClientHelloFp ch;
     REQUIRE(parse_client_hello(hs, hs_len, ch));
@@ -221,36 +313,36 @@ TEST_CASE("build_chrome131_clienthello is a well-formed Chrome ClientHello") {
     CHECK(ch.real_version == 0x0304);
 
     // 15 real cipher suites (GREASE-stripped) and 16 real extensions
-    // (GREASE-stripped) -> the canonical recent-Chrome JA4 a-part.
+    // (GREASE-stripped) -> the canonical recent-chrome ja4 a-part.
     CHECK(ch.ciphers.size() == 15);
     CHECK(ch.extensions.size() == 16);
 
     std::string ja4 = ja4_client(ch);
     CHECK(ja4.rfind("t13d1516h2_", 0) == 0);
 
-    // padding extension (0x0015) pushed the hello into Chrome's size band.
+    // padding extension (0x0015) pushed the hello into chrome's size band.
     CHECK(hs_len >= 256);
 
     // each call re-randomizes the GREASE / random / key_share, so two
-    // builds differ byte-for-byte but yield the same JA4 (GREASE-stripped).
-    auto rec2 = build_chrome131_clienthello("example.com");
+    // builds differ byte-for-byte but yield the same ja4 (GREASE-stripped).
+    auto rec2 = build_chromelike_clienthello("example.com");
     CHECK(rec2 != rec);
     ClientHelloFp ch2;
     REQUIRE(parse_client_hello(rec2.data() + 5, rec2.size() - 5, ch2));
     CHECK(ja4_client(ch2) == ja4);
 }
 
-TEST_CASE("build_chrome131_clienthello keeps the GREASE invariants") {
-    // a KeyShareEntry MUST correspond to a group offered in supported_groups
-    // (RFC 8446 4.2.8), so the GREASE group in key_share has to equal the
+TEST_CASE("build_chromelike_clienthello keeps the GREASE invariants") {
+    // a keyshareentry must correspond to a group offered in supported_groups
+    // (rfc 8446 4.2.8), so the GREASE group in key_share has to equal the
     // GREASE in supported_groups, and the two bookend GREASE extension types
-    // must differ or it is a duplicate extension. a strict server (OpenSSL)
+    // must differ or it is a duplicate extension. a strict server (openssl)
     // rejects either violation, so guard both here. checked over many builds
     // because the GREASE values are randomized per call.
     auto rd16 = [](const uint8_t* p){ return (uint16_t)((p[0] << 8) | p[1]); };
 
     for (int iter = 0; iter < 64; ++iter) {
-        auto rec = build_chrome131_clienthello("a.example.com");
+        auto rec = build_chromelike_clienthello("a.example.com");
         REQUIRE(rec.size() > 5);
         const uint8_t* hs = rec.data() + 5;
         size_t hs_len = rec.size() - 5;
@@ -285,7 +377,7 @@ TEST_CASE("build_chrome131_clienthello keeps the GREASE invariants") {
             if (et == 0x000a)                       // supported_groups
                 sg_grease = rd16(body + 2);         // first entry after list len
             if (et == 0x0033)                       // key_share
-                ks_grease = rd16(body + 2);         // first KeyShareEntry group
+                ks_grease = rd16(body + 2);         // first keyshareentry group
             e += 4 + el;
             ++ext_idx;
         }

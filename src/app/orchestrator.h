@@ -7,3 +7,6 @@
 #include <string>
 
 FullReport run_full_target(const std::string& target);
+
+// report of the most recent run_full_target, nullptr before the first
+const FullReport* last_full_report();

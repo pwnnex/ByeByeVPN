@@ -17,10 +17,10 @@ permissions:
   contents: read
 
 jobs:
-  # -------------------------------------------------------------------
-  # Linux: static analysis + unit tests + a libFuzzer smoke pass. runs
-  # on every push / PR. the Windows release job gates on this passing.
-  # -------------------------------------------------------------------
+  #
+  # linux: static analysis + unit tests + a libfuzzer smoke pass. runs
+  # on every push / pr. the windows release job gates on this passing.
+  #
   lint-and-test:
     name: lint + unit tests + fuzz smoke (Linux)
     runs-on: ubuntu-latest
@@ -50,20 +50,23 @@ jobs:
         run: |
           set -eux
           # the test target builds the platform-agnostic logic modules
-          # plus the doctest driver. -Werror here so a warning fails CI.
+          # plus the doctest driver. -werror here so a warning fails ci.
           make test CXX='g++ -Werror'
+
+      - name: verify embedded public suffix snapshot
+        run: python3 tools/update_public_suffix.py --check
 
       - name: clang-tidy (platform-agnostic modules)
         run: |
           set -eux
-          # only the modules that compile on Linux are linted: the Windows
-          # networking / adapter code needs the Win32 SDK headers and is
-          # covered by the Windows build job instead.
+          # only the modules that compile on linux are linted: the windows
+          # networking / adapter code needs the win32 sdk headers and is
+          # covered by the windows build job instead.
           #
           # bugprone-* and clang-analyzer-* are the real-bug families. they
           # gate the build (--warnings-as-errors). the broader modernize-* /
-          # readability-* opinion layers are intentionally NOT enabled.
-          # bugprone-easily-swappable-parameters is excluded too: it is a
+          # readability-* opinion layers aren't enabled.
+          # bugprone-easily-swappable-params is excluded too: it is a
           # design-opinion check that flags any two same-typed params, not
           # a bug finder.
           CHECKS='-*,bugprone-*,clang-analyzer-*'
@@ -83,17 +86,12 @@ jobs:
           set -eux
           make fuzz FUZZ_CXX='clang++'
           # short time-boxed run: catches obvious memory-safety regressions
-          # in the byte parsers without holding up CI. a real campaign runs
+          # in the byte parsers without holding up ci. a real campaign runs
           # this for hours, not 45 seconds.
           ./fuzz_ja4 -max_total_time=45 -timeout=10
 
-  # -------------------------------------------------------------------
-  # Linux: the full unit-test suite under AddressSanitizer + UBSan. this
-  # is a separate job because the sanitizer runtime roughly doubles build
-  # + run time. -fno-sanitize-recover makes any UB a hard failure, so a
-  # green run here is a real "no memory bug / no UB" guarantee, not a
-  # best-effort one. the Windows release gates on this passing.
-  # -------------------------------------------------------------------
+  #
+  # sanitizer checks for the paths exercised by the unit tests
   sanitizers:
     name: ASan + UBSan unit tests (Linux)
     runs-on: ubuntu-latest
@@ -110,11 +108,11 @@ jobs:
           set -eux
           make test-asan CXX=clang++
 
-  # -------------------------------------------------------------------
-  # Windows: the actual static-exe release build. gates on the Linux
+  #
+  # windows: the actual static-exe release build. gates on the linux
   # lint/test and sanitizer jobs. only a tag push produces the uploaded
-  # artifact; branch / PR pushes just prove the Windows build still links.
-  # -------------------------------------------------------------------
+  # artifact; branch / pr pushes just prove the windows build still links.
+  #
   windows-static:
     name: static exe (Windows)
     needs: [lint-and-test, sanitizers]
@@ -143,7 +141,7 @@ jobs:
         run: |
           set -eux
           # these sha values come from the public msys2 pkg
-          # mingw-w64-ucrt-x86_64-openssl-3.6.2-2 (see BUILD.md).
+          # mingw-w64-ucrt-x86_64-openssl-3.6.2-2 (see build.md).
           # if the repo copy ever diverges, something was tampered with.
           EXPECT_LIBSSL=bf7a501fbcd50db87187ff263c35a264be48dd5ce18278bdf350aa6ad2a6a038
           EXPECT_LIBCRYPTO=23c62ffdef07d5ee2a4667eba45d713b56b5f57cbd0ae4b15dfd761500bd0046
@@ -182,6 +180,36 @@ jobs:
           make windows-static
           ls -la byebyevpn.exe
 
+      - name: build UDP loopback test driver
+        run: |
+          g++ -std=c++20 -O1 -Wall -Wextra -Werror -static \
+            -I/ucrt64/include tests/udp_probe_harness.cpp src/net/udp.cpp \
+            src/common/util.cpp src/common/config.cpp build-win/libcrypto.a \
+            -lws2_32 -lcrypt32 -lbcrypt -o udp-probe-tests.exe
+
+      - name: build TLS/HTTP loopback test driver
+        run: make web-probe-tests.exe
+
+      - name: offline CLI and network loopback regressions
+        shell: pwsh
+        run: |
+          python tests/test_names_cli.py ./byebyevpn.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/test_awg_cli.py ./byebyevpn.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/test_xray_cli.py ./byebyevpn.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/test_udp_socket.py ./udp-probe-tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/test_web_socket.py ./web-probe-tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/test_protocol_socket.py ./web-probe-tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/test_dpi_socket.py ./byebyevpn.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/test_audit_fixtures.py ./byebyevpn.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: check no mingw/openssl dll leaked into exe
         run: |
           set -eux
@@ -219,8 +247,8 @@ jobs:
         id: sbom
         run: |
           set -eux
-          # a minimal CycloneDX-flavored SBOM. the point is a verifiable
-          # bill of materials: the exact pinned OpenSSL package, its sha, the
+          # a minimal cyclonedx-flavored sbom. the point is a verifiable
+          # bill of materials: the exact pinned openssl package, its sha, the
           # compiler, and the source revision the exe was built from. paired
           # with the reproducible-build verification above, anyone can
           # rebuild this exe and check it against what we shipped.
@@ -273,14 +301,16 @@ jobs:
         id: zipper
         run: |
           set -eux
-          # GITHUB_REF_NAME on a branch push can contain a slash; sanitize
+          # github_ref_name on a branch push can contain a slash; sanitize
           # it so the zip name is always a single path component.
           VER="${GITHUB_REF_NAME:-dev}"
           SAFE_VER=$(echo "$VER" | tr '/' '_')
           NAME="byebyevpn-${SAFE_VER}-win64.zip"
           mkdir -p dist-release
           cp byebyevpn.exe LICENSE NOTICE README.md CHANGELOG.md byebyevpn-sbom.json dist-release/
-          (cd dist-release && zip -9 "../${NAME}" *)
+          mkdir -p dist-release/third_party/psl
+          cp third_party/psl/LICENSE dist-release/third_party/psl/
+          (cd dist-release && zip -9 -r "../${NAME}" *)
           ZH=$(sha256sum "${NAME}" | awk '{print $1}')
           echo "zip_name=${NAME}" >> "$GITHUB_OUTPUT"
           echo "zip_sha=${ZH}"    >> "$GITHUB_OUTPUT"
@@ -294,7 +324,7 @@ jobs:
             echo "have_key=yes" >> "$GITHUB_OUTPUT"
           else
             echo "have_key=no" >> "$GITHUB_OUTPUT"
-            echo "no MINISIGN_SECRET_KEY secret set — skipping signing (see BUILD.md)"
+            echo "no MINISIGN_SECRET_KEY secret set, skipping signing (see BUILD.md)"
           fi
 
       - name: sign release artifacts (minisign)
@@ -305,7 +335,7 @@ jobs:
         run: |
           set -eu
           # minisign is only needed when a signing key is configured, so it
-          # is installed here rather than in the job-wide package list — an
+          # is installed here rather than in the job-wide package list - an
           # unsigned release never depends on it.
           pacman -S --noconfirm --needed minisign
           printf '%s\n' "${MINISIGN_KEY}" > "${RUNNER_TEMP}/minisign.key"
@@ -324,4 +354,55 @@ jobs:
             ${{ steps.zipper.outputs.zip_name }}
             byebyevpn-sbom.json
             *.minisig
+          if-no-files-found: warn
+
+  #
+  # ground-truth lab on the exe the windows job just built (UCRT64, the
+  # release build, not a local msvcrt one). a false positive in any matrix
+  # row, a label outside a stand's accepted set or a stand that did not
+  # start fails the run. a release tag needs this job green.
+  # docs/GROUNDTRUTH.md, docs/CALIBRATION.md.
+  #
+  groundtruth:
+    name: ground-truth lab, zero FP gate (Windows)
+    needs: [windows-static]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: byebyevpn-win64
+          path: dist
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: fetch pinned xray for the server stands
+        run: |
+          # the xray build the lab is calibrated against. sha256 of the
+          # release zip, pinned 2026-09-30; stands C D E F S Q need it.
+          $url  = 'https://github.com/XTLS/Xray-core/releases/download/v26.7.28/Xray-windows-64.zip'
+          $want = 'c7172078fca4711bcd92a4774dcd1822544579c58816197575c47533317fd8d1'
+          Invoke-WebRequest -Uri $url -OutFile xray.zip
+          $got = (Get-FileHash xray.zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $want) { throw "xray zip sha mismatch, got $got" }
+          Expand-Archive xray.zip -DestinationPath xray-bin
+          "BBV_XRAY=$((Resolve-Path xray-bin\xray.exe).Path)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: run the lab
+        run: |
+          python tools/groundtruth/run.py dist/byebyevpn.exe --tag ci --require-all
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: groundtruth-matrix
+          path: tools/groundtruth/.run/results/ci/
           if-no-files-found: warn

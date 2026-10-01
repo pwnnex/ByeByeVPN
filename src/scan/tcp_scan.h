@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// parallel TCP port scan with banner grab + interactive cancel ('q' to skip).
+// parallel tcp port scan with banner grab + interactive cancel ('q' to skip).
 #pragma once
 
 #include <string>

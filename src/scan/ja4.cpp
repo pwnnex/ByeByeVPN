@@ -13,7 +13,7 @@ using std::string;
 using std::vector;
 
 bool ja4_is_grease(uint16_t v) {
-    // RFC 8701 GREASE: 0x?A?A pattern (low nibble 'A' in both bytes).
+    // rfc 8701 GREASE: 0x?A?A pattern (low nibble 'A' in both bytes).
     return (v & 0x0f0f) == 0x0a0a;
 }
 
@@ -35,7 +35,7 @@ string sha256_12(const string& input) {
     return out;
 }
 
-// raw byte readers ----------------------------------------------------------
+// raw byte readers
 
 namespace {
 
@@ -58,6 +58,19 @@ string hex4(uint16_t v) {
     return string(b, 4);
 }
 
+// foxio ja4.md: first+last char, hex fallback
+string alpn_pair(const string& alpn) {
+    if (alpn.empty()) return "00";
+    auto alnum = [](unsigned char c) {
+        return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+    };
+    const auto first = static_cast<unsigned char>(alpn.front());
+    const auto last  = static_cast<unsigned char>(alpn.back());
+    if (alnum(first) && alnum(last)) return string{(char)first, (char)last};
+    static const char hexd[] = "0123456789abcdef";
+    return string{hexd[first >> 4], hexd[last & 0x0f]};
+}
+
 string join_csv(const vector<uint16_t>& vs, bool sort_first) {
     vector<uint16_t> v = vs;
     if (sort_first) std::sort(v.begin(), v.end());
@@ -69,7 +82,7 @@ string join_csv(const vector<uint16_t>& vs, bool sort_first) {
     return out;
 }
 
-// scan extension block of a ClientHello. callback receives (ext_type, body_ptr, body_len).
+// scan extension block of a clienthello. callback receives (ext_type, body_ptr, body_len).
 // returns false on truncation.
 template <typename Fn>
 bool walk_exts(const uint8_t* p, const uint8_t* end, Fn&& fn) {
@@ -90,14 +103,14 @@ bool walk_exts(const uint8_t* p, const uint8_t* end, Fn&& fn) {
 
 } // namespace
 
-// parsers -------------------------------------------------------------------
+// parsers
 
 bool parse_client_hello(const uint8_t* data, size_t len, ClientHelloFp& out) {
     out = {};
-    // SSL_set_msg_callback delivers handshake msg starting with the HandshakeType
-    // byte and a uint24 length, followed by the ClientHello struct.
+    // SSL_set_msg_callback delivers handshake msg starting with the handshaketype
+    // byte and a uint24 length, followed by the clienthello struct.
     if (len < 4) return false;
-    if (data[0] != 0x01 /* HandshakeType client_hello */) return false;
+    if (data[0] != 0x01 /* handshaketype client_hello */) return false;
     uint32_t mlen = rd24(data + 1);
     if (mlen + 4 > len) return false;
     const uint8_t* p   = data + 4;
@@ -135,7 +148,7 @@ bool parse_client_hello(const uint8_t* data, size_t len, ClientHelloFp& out) {
     if (end - p < cmplen) return false;
     p += cmplen;
 
-    // extensions <0..2^16-1>, may be absent in some TLS 1.0 hellos
+    // extensions <0..2^16-1>, may be absent in some tls 1.0 hellos
     if (p == end) {
         out.real_version = out.legacy_version;
         out.ok = true;
@@ -147,7 +160,7 @@ bool parse_client_hello(const uint8_t* data, size_t len, ClientHelloFp& out) {
         out.extensions.push_back(et);
         switch (et) {
             case 0x0000: { // server_name
-                // ServerNameList: <2..2^16-1>; entry: 1 byte type + <1..2^16-1>
+                // servernamelist: <2..2^16-1>; entry: 1 byte type + <1..2^16-1>
                 if (bl < 5) break;
                 uint16_t snl = rd16(body);
                 if (snl + 2 > bl) break;
@@ -187,7 +200,7 @@ bool parse_client_hello(const uint8_t* data, size_t len, ClientHelloFp& out) {
                 }
                 break;
             }
-            case 0x0010: { // ALPN
+            case 0x0010: { // alpn
                 if (bl < 2) break;
                 uint16_t al = rd16(body);
                 if (al + 2 > bl) break;
@@ -263,7 +276,7 @@ bool parse_server_hello(const uint8_t* data, size_t len, ServerHelloFp& out) {
     bool ok = walk_exts(p, end, [&](uint16_t et, const uint8_t* body, uint16_t bl){
         if (ja4_is_grease(et)) return;
         out.extensions.push_back(et);
-        if (et == 0x0010 /* ALPN */) {
+        if (et == 0x0010 /* alpn */) {
             if (bl < 3) return;
             uint16_t al = rd16(body);
             if (al + 2 > bl) return;
@@ -283,7 +296,7 @@ bool parse_server_hello(const uint8_t* data, size_t len, ServerHelloFp& out) {
     return true;
 }
 
-// builders ------------------------------------------------------------------
+// builders
 
 string ja4_client(const ClientHelloFp& ch) {
     if (!ch.ok) return {};
@@ -292,21 +305,14 @@ string ja4_client(const ClientHelloFp& ch) {
     char snif = ch.has_sni ? 'd' : 'i';
     int cn = (int)std::min<size_t>(99, ch.ciphers.size());
     int en = (int)std::min<size_t>(99, ch.extensions.size());
-    char alpn2[3] = {'0','0',0};
-    if (ch.alpn_first.size() >= 2) {
-        alpn2[0] = ch.alpn_first[0];
-        alpn2[1] = ch.alpn_first[1];
-    } else if (ch.alpn_first.size() == 1) {
-        alpn2[0] = ch.alpn_first[0];
-        alpn2[1] = '0';
-    }
+    const string alpn2 = alpn_pair(ch.alpn_first);
     std::snprintf(a, sizeof(a), "t%2s%c%02d%02d%c%c", ver, snif, cn, en, alpn2[0], alpn2[1]);
 
-    // JA4_b: sha256 of comma-joined sorted ciphers (hex4, lowercase).
-    string b = sha256_12(join_csv(ch.ciphers, true));
+    // ja4_b: sha256 of comma-joined sorted ciphers (hex4, lowercase).
+    string b = ch.ciphers.empty() ? "000000000000" : sha256_12(join_csv(ch.ciphers, true));
 
-    // JA4_c: sorted exts EXCLUDING SNI (0x0000) and ALPN (0x0010), then "_"
-    // and sigalgs in ORIGINAL order.
+    // ja4_c: sorted exts excluding sni (0x0000) and alpn (0x0010), then "_"
+    // and sigalgs in original order.
     vector<uint16_t> exts_for_c;
     exts_for_c.reserve(ch.extensions.size());
     for (auto e: ch.extensions) {
@@ -339,26 +345,13 @@ string ja4s_server(const ServerHelloFp& sh) {
     char a[16];
     const char* ver = version_2digit(sh.real_version ? sh.real_version : sh.legacy_version);
     int en = (int)std::min<size_t>(99, sh.extensions.size());
-    char alpn2[3] = {'0','0',0};
-    if (sh.alpn_negotiated.size() >= 2) {
-        alpn2[0] = sh.alpn_negotiated[0];
-        alpn2[1] = sh.alpn_negotiated[1];
-    } else if (sh.alpn_negotiated.size() == 1) {
-        alpn2[0] = sh.alpn_negotiated[0];
-    }
+    const string alpn2 = alpn_pair(sh.alpn_negotiated);
     std::snprintf(a, sizeof(a), "t%2s%02d%c%c", ver, en, alpn2[0], alpn2[1]);
 
     string b = hex4(sh.cipher); // server picks one cipher, no sort
 
-    // c: sha256 of sorted server-side extension list, no special exclusions
-    vector<uint16_t> e = sh.extensions;
-    std::sort(e.begin(), e.end());
-    string c_in;
-    for (size_t i = 0; i < e.size(); ++i) {
-        if (i) c_in += ',';
-        c_in += hex4(e[i]);
-    }
-    string c = sha256_12(c_in);
+    // order as seen, not sorted: foxio ja4.py
+    string c = sha256_12(join_csv(sh.extensions, false));
 
     string out = a;
     out += '_'; out += b;
@@ -377,9 +370,15 @@ string ja4h(const Ja4hInput& in) {
     else if (in.http_version == "1.0") hv = "10";
     char ck = in.has_cookie ? 'c' : 'n';
     char rf = in.has_referer ? 'r' : 'n';
-    char l1 = '0', l2 = '0';
-    if (in.accept_language.size() >= 1) l1 = (char)std::tolower((unsigned char)in.accept_language[0]);
-    if (in.accept_language.size() >= 2) l2 = (char)std::tolower((unsigned char)in.accept_language[1]);
+    // foxio ja4h.py: first tag, no '-', 4 chars, '0' pad
+    string lang;
+    for (char c : in.accept_language) {
+        if (c == ',' || c == ';') break;
+        if (c == '-') continue;
+        lang += (char)std::tolower((unsigned char)c);
+        if (lang.size() == 4) break;
+    }
+    lang.resize(4, '0');
     char hcount[3];
     int hc = (int)std::min<size_t>(99, in.header_names_in_order.size());
     std::snprintf(hcount, sizeof(hcount), "%02d", hc);
@@ -389,9 +388,9 @@ string ja4h(const Ja4hInput& in) {
     a += hv;
     a += ck; a += rf;
     a += hcount;
-    a += l1; a += l2;
+    a += lang;
 
-    // JA4H_b: header NAMES in order, comma-joined, sha256[:12]
+    // ja4h_b: header names in order, comma-joined, sha256[:12]
     string b_in;
     for (size_t i = 0; i < in.header_names_in_order.size(); ++i) {
         if (i) b_in += ',';
@@ -399,7 +398,7 @@ string ja4h(const Ja4hInput& in) {
     }
     string b = sha256_12(b_in);
 
-    // JA4H_c: cookie names sorted, sha256[:12] (or "0" * 12 if no cookies)
+    // ja4h_c: cookie names sorted, sha256[:12] (or "0" * 12 if no cookies)
     string c;
     if (in.cookie_names.empty()) {
         c = "000000000000";
@@ -414,7 +413,7 @@ string ja4h(const Ja4hInput& in) {
         c = sha256_12(cin);
     }
 
-    // JA4H_d: cookie name=value sorted by name, sha256[:12]
+    // ja4h_d: cookie name=value sorted by name, sha256[:12]
     string d;
     if (in.cookies_kv.empty()) {
         d = "000000000000";

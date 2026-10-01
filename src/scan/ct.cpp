@@ -7,25 +7,19 @@ using std::string;
 
 CtCheck ct_check(const string& cert_sha256) {
     CtCheck r;
-    if (cert_sha256.size() < 32) { r.err = "no sha256"; return r; }
+    // need a full 64-char hex digest
+    // a bad query returning [] doesn't mean the cert is missing from ct
+    if (cert_sha256.size() != 64) { r.err = "no sha256"; return r; }
+    for (char c : cert_sha256) {
+        bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+        if (!hex) { r.err = "malformed sha256"; return r; }
+    }
     r.queried = true;
     string url = "https://crt.sh/?q=" + cert_sha256 + "&output=json";
     auto h = http_get(url, 5000);
-    if (!h.ok()) { r.err = "http " + std::to_string(h.status); return r; }
-    if (h.body.size() >= 2) {
-        string b = trim(h.body);
-        if (b.size() >= 2 && b[0] == '[' && b[1] == ']') {
-            r.found = false;
-            r.log_entries = 0;
-        } else {
-            r.found = true;
-            int cnt = 0;
-            size_t p = 0;
-            while ((p = h.body.find("\"id\"", p)) != string::npos) {
-                ++cnt; ++p; if (cnt > 50) break;
-            }
-            r.log_entries = cnt;
-        }
+    if (!h.ok()) {
+        r.err = h.err.empty() ? "http " + std::to_string(h.status) : h.err;
+        return r;
     }
-    return r;
+    return parse_ct_response(h.body);
 }

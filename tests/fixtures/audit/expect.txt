@@ -1,0 +1,46 @@
+# audit-config fixtures. one line per file:
+#   +tag  must fire      -tag  must not fire
+#   cat:tag=category     tier=PREFIX (legacy tier string starts with it)
+# every rule has a file where it fires and a look-alike where it must not.
+
+xray-dup-listener.json             +duplicate-listener tier=UNKNOWN
+xray-tcp-udp-same-port.json        -duplicate-listener
+xray-distinct-addresses.json       -duplicate-listener
+sb-dup-listener.json               +duplicate-listener
+sb-hy2-and-vless-443.json          -duplicate-listener
+
+xray-dup-tag.json                  +duplicate-tag tier=UNKNOWN
+xray-untagged.json                 -duplicate-tag
+xray-dup-email.json                +duplicate-email tier=UNKNOWN
+xray-email-across-inbounds.json    -duplicate-email
+xray-dup-user.json                 +duplicate-user cat:duplicate-user=hygiene tier=PASS
+xray-user-across-inbounds.json     -duplicate-user
+sb-dup-user.json                   +duplicate-user cat:duplicate-user=hygiene
+
+xray-tls-range.json                +tls-version-range tier=UNKNOWN
+xray-tls-range-ok.json             -tls-version-range
+sb-tls-range.json                  +tls-version-range
+
+xray-ws-settings-on-raw.json       +settings-ignored cat:settings-ignored=hygiene tier=PASS
+xray-tcpsettings-alias.json        -settings-ignored
+xray-splithttp-alias.json          -settings-ignored
+xray-tls-settings-security-none.json +settings-ignored
+sb-reality-tls-off.json            +settings-ignored +plaintext-proto -reality-dest-brand
+sb-reality-on.json                 -settings-ignored -plaintext-proto
+
+xray-debug-log.json                +debug-log cat:debug-log=hygiene tier=PASS
+xray-warning-log.json              -debug-log
+sb-trace-log.json                  +debug-log
+
+xray-api-public.json               +api-public tier=BLOCK
+xray-api-local.json                -api-public
+xray-api-listen-public.json        +api-public
+sb-clash-public.json               +api-public
+sb-clash-local.json                -api-public
+sb-clash-all-interfaces.json       +api-public
+
+sb-reality-shortid-invalid.json    +reality-shortid-invalid
+sb-reality-shortid-ok.json         -reality-shortid-invalid +reality-shortid-empty
+sb-reality-no-server.json          +reality-target-missing
+
+xray-reality-show.json             +reality-show cat:reality-show=hygiene tier=PASS

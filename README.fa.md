@@ -2,6 +2,10 @@
 
 <div dir="rtl">
 
+> **وضعیت ترجمه (۲۰۲۶-۰۹-۳۰):** متن اصلی این ترجمه برای v2.5.7 نوشته
+> شده و پس از آن فقط بخش «تغییرات ۲۰۲۶-۰۹» به‌روز شده است. در صورت
+> اختلاف با [README.md](README.md) انگلیسی، نسخهٔ انگلیسی معتبر است.
+
 اسکنر قابلیت شناسایی VPN / DPI / Reality / ТСПУ. یک فایل اجرایی
 ایستا `byebyevpn.exe` برای Windows (روی Linux و macOS از طریق Wine
 کار می‌کند)، بدون نیاز به مجوز مدیر، بدون وابستگی به DLL.
@@ -38,6 +42,38 @@
 پشتهٔ شناسایی‌شده، و حکمی که یک طبقه‌بند سطح TSPU صادر می‌کرد.
 **نیازی به اتصال VPN به هدف نیست** - اسکنر هدف را از بیرون نگاه
 می‌کند، دقیقاً همان‌طور که یک ISP یا جعبهٔ میانی DPI می‌بیند.
+
+### تغییرات ۲۰۲۶-۰۹ (در صورت اختلاف، README انگلیسی معتبر است)
+
+بقیهٔ این ترجمه هنوز بخش به بخش به‌روز نشده است. قراردادهای تغییرکرده:
+
+- **پیش‌بررسی (preflight)**: پیش از ارسال هر probe، خود این دستگاه بررسی می‌شود.
+  اگر مسیر به هدف از آداپتور تونل بگذرد، اتصال TCP به `192.0.2.1` (RFC 5737، بدون مسیر)
+  موفق شود (پشتهٔ محلی هر SYN را می‌پذیرد)، zapret / GoodbyeDPI / clumsy در حال اجرا باشد،
+  هدف به نشانی fake-IP یا CGNAT برسد یا `--expect-ip` با جست‌وجوی بیرونی نخواند،
+  اسکن متوقف می‌شود: برچسب `UNRELIABLE`، کد خروج 5، و هیچ بسته‌ای به هدف نمی‌رود.
+  `--i-know-what-i-am-doing` اسکن را اجباری می‌کند و حکم با علامت overridden می‌آید.
+- **فقط سه سیگنال امتیاز دارند**: `wg-family` (-15)، `sstp` (-18)، `socks5` (-20)، همه در
+  ردهٔ A، با شناسنامه در [docs/SIGNALS.md](docs/SIGNALS.md). نتیجهٔ هر بررسی یکی از
+  positive، negative، inconclusive یا not applicable است؛ فقط positive امتیاز کم می‌کند
+  و به دو مشاهدهٔ هم‌سو از حداکثر سه نیاز دارد.
+- برچسب‌های VPN / proxy / Tor از GeoIP، probeهای J3، دادهٔ پشتهٔ TCP، JA4S و RTT فقط
+  مرجع‌اند و امتیاز نمی‌گیرند. سیستم‌عامل دیگر حدس زده نمی‌شود و راهنمای پورت‌ها
+  دیگر به Reality اشاره نمی‌کند.
+- در این حالت‌ها حکمی داده نمی‌شود (`INCONCLUSIVE`، کد 4): ۲ از ۳ پورت کنترلی تصادفی
+  اتصال را بپذیرند، بررسی مسیر ۵۰٪ یا بیشتر گم کند، بیش از نیمی از بررسی‌های مرتبط
+  بی‌نتیجه باشند، اسکن قطع شود، یا هیچ سرویسی پاسخ قابل انتساب ندهد.
+- `CLEAN` یعنی «هیچ امضای نام‌داری پاسخ نداد»، نه «DPI این گره را نمی‌بیند». هر گزارش
+  فهرست می‌کند که probeها چه چیزی را نمی‌بینند: Reality با هدف سالم،
+  Shadowsocks AEAD/2022، WireGuard/AmneziaWG بدون کلید سرور، Trojan یا VLESS پشت
+  یک سایت واقعی.
+- کدهای خروج: 0 CLEAN، 1 NOISY، 2 SUSPICIOUS، 3 OBVIOUSLY-VPN، 4 INCONCLUSIVE،
+  5 UNRELIABLE، 64 خطای استفاده. `ech` اگر خود درخواست DoH شکست بخورد 4 برمی‌گرداند.
+- **پنل تعاملی**: اجرای `byebyevpn` بدون آرگومان پنل تمام‌صفحه را باز می‌کند: کلیدهای
+  جهت برای انتخاب، Enter اجرا، `S` تنظیمات، `L` آخرین اسکن، `Q` خروج. هر مورد
+  نشان می‌دهد چه چیزی به شبکه می‌فرستد.
+- اندازه‌گیری مثبت کاذب: [docs/GROUNDTRUTH.md](docs/GROUNDTRUTH.md)،
+  [docs/CALIBRATION.md](docs/CALIBRATION.md)، [docs/TSPU-MODEL.md](docs/TSPU-MODEL.md).
 
 ### خط لوله
 
@@ -116,24 +152,26 @@ Reality / XTLS هر ۸ مورد را بی‌صدا رها می‌کند؛ HTTP �
 (به سرویس‌های IP-intel، به هدف در حین بازبینی HTTP-over-TLS، به
 crt.sh) **بدون** هدر خاص ابزار ارسال می‌شود.
 
-برای `http_get()` (استفاده شده برای IP-intel و crt.sh)، درخواست
-بایت به بایت به این شکل است:
+برای `http_get()` (استفاده شده برای IP-intel، crt.sh و جست‌وجوی DoH
+در فرمان `ech`)، درخواست بایت به بایت (ضبط شده روی loopback) به این
+شکل است:
 
 </div>
 
 ```
 GET /path HTTP/1.1
+Connection: Keep-Alive
 Host: <host>
 ```
 
 <div dir="rtl">
 
-**هیچ** `User-Agent`، `Accept`، `Accept-Language`، `Accept-Encoding`،
-`Sec-Fetch-*`، `Upgrade-Insecure-Requests` ارسال نمی‌شود. این نقاط
-پایانی یک GET خالی را می‌پذیرند - دقیقاً همان‌طور که `curl -sS
-https://ipwho.is/8.8.8.8` بدون هیچ flag کار می‌کند. اگر سرور خودش
-gzip را انتخاب کند، WinHTTP همچنان به‌طور شفاف آن را باز می‌کند،
-اما ما پشتیبانی از آن را اعلام نمی‌کنیم.
+`Connection: Keep-Alive` را خود WinHTTP اضافه می‌کند. درخواست پشتیبان
+DoH کلادفلر در فرمان `ech` فقط `Accept: application/dns-json` را اضافه
+می‌کند. **هیچ** `User-Agent`، `Accept-Language`، `Accept-Encoding`،
+`Sec-Fetch-*`، `Upgrade-Insecure-Requests` ارسال نمی‌شود. نسخه‌های پیش
+از این اصلاح `Accept-Encoding: gzip, deflate` را هم می‌فرستادند. پاسخ
+فشرده اکنون رد می‌شود و باز نمی‌شود.
 
 برای `https_probe()` (بازبینی HTTP-over-TLS هدف)، هدرها نیز حداقلی
 هستند (`Host`، `Accept: */*`، `Connection: close`).
@@ -145,26 +183,34 @@ gzip را انتخاب کند، WinHTTP همچنان به‌طور شفاف آن
 
 برای probeهای پروتکل (UDP handshake، TLS ClientHello، ICMP) هر
 فیلدی که کلاینت واقعی تصادفی می‌کند، با OpenSSL `RAND_bytes` پر
-می‌شود: session id + offset زمان OpenVPN، ephemeral WG، DCID
-QUIC / Hysteria2، ClientRandom TLS، پیشوند invalid-SNI، transaction
-id DNS، tunnel id L2TP.
+می‌شود: بدنه WireGuard MessageInitiation، پیشوند junk و بدنه WG در
+AmneziaWG، DCID در QUIC / Hysteria2، ClientRandom در TLS، پیشوند
+invalid-SNI.
 
-محموله ICMP traceroute همان الگوی استاندارد `ping.exe` ویندوز است
-(`abcdefghi...`، ۳۲ بایت) - بایت به بایت مثل چیزی که هر کلاینت
-ویندوز می‌فرستد.
+محموله ICMP traceroute الگوی `ping.exe` ویندوز است
+(`abcdefghijklmnopqrstuvwabcdefghi`، ۳۲ بایت). نسخه‌های پیش از این
+اصلاح ۳۳ بایت می‌فرستادند (بایت صفر پایان رشته C هم ارسال می‌شد) که
+هیچ ابزار ویندوزی چنین نمی‌فرستد.
+
+در uTLS dual-probe، طرف «chrome» یک ClientHello مصنوعی است که دستی
+ساخته می‌شود: مجموعه افزونه‌های Chrome پیش از X25519MLKEM768، با JA4
+`t13d1516h2_8daaf6152771_e5627efa2ab1` (مقدار نمونه در مشخصات FoxIO).
+این همان بایت‌هایی نیست که Chrome فعلی می‌فرستد: ترتیب افزونه‌ها ثابت
+است (Chrome آن را در هر اتصال جابه‌جا می‌کند)، X25519MLKEM768 و ECH
+GREASE ندارد. آن را اثر انگشت جداگانه بدانید، نه ترافیک مرورگر.
 
 ### بازبینی
 
-برای رشته‌های شناسایی‌کنندهٔ ابزار در سورس grep بزنید. تنها سه
-تطابق غیرشبکه‌ای انتظار می‌رود:
+برای رشته‌های شناسایی‌کنندهٔ ابزار در درخت ماژولار سورس grep بزنید.
+یک تطابق انتظار می‌رود: printf مربوط به `--help` در `src/app/cli.cpp`
+(سقف ۳ برای حاشیه):
 
 </div>
 
 ```
-$ grep -nE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' src/byebyevpn.cpp
-1:     // ByeByeVPN - full VPN / proxy / Reality detectability analyzer
-...    // کامنت http_get درباره scrub
-...    // printf در --help
+$ grep -rnE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' \
+    src --include='*.cpp' --include='*.h'
+src/app/cli.cpp:131:    printf("ByeByeVPN - full TSPU/DPI/VPN ...
 ```
 
 <div dir="rtl">

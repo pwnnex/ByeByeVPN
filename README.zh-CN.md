@@ -1,5 +1,8 @@
 # ByeByeVPN
 
+> **翻译状态（2026-09-30）：** 本译文正文写于 v2.5.7，之后只更新了下方
+> 「2026-09 变更」一节。与英文 [README.md](README.md) 不一致时，以英文版为准。
+
 VPN / DPI / Reality / ТСПУ 可检测性扫描器。单个静态 `byebyevpn.exe`，
 Windows 原生（Linux 和 macOS 可通过 Wine 运行），无需管理员权限，
 无 DLL 依赖。
@@ -31,6 +34,32 @@ OCR 方法论（§5-10）加上 2026 年现代隧道指纹检测。输出：检�
 识别出的协议栈、以及 TSPU 级别分类器会做出的裁决。**无需**连接到
 目标的 VPN——扫描器以外部视角看待目标，就像 ISP 或 DPI 中间盒
 看到的一样。
+
+### 2026-09 变更（与英文 README 不一致时，以英文版为准）
+
+本译文的其余部分尚未逐段更新。以下是已改变的约定：
+
+- **预检（preflight）**：在发送任何探测之前检查本机。通往目标的路由经过隧道网卡、
+  到 `192.0.2.1`（RFC 5737，不可路由）的 TCP 连接竟然成功（本地协议栈接受任何 SYN）、
+  正在运行 zapret / GoodbyeDPI / clumsy、目标解析为 fake-IP 或 CGNAT 地址、
+  或 `--expect-ip` 与外部查询不符时，扫描停止，标签 `UNRELIABLE`，退出码 5，
+  不向目标发送任何数据包。`--i-know-what-i-am-doing` 强制扫描，结论标记为 overridden。
+- **只有三个信号计分**：`wg-family`（-15）、`sstp`（-18）、`socks5`（-20），均为 A 级，
+  说明见 [docs/SIGNALS.md](docs/SIGNALS.md)。每项检查的结果为 positive、negative、
+  inconclusive 或 not applicable；只有 positive 计分，且需要最多三次观测中两次一致。
+- GeoIP 的 VPN / 代理 / Tor 标签、J3 垃圾探测、TCP 协议栈数据、JA4S、RTT 仅作参考，不计分。
+  不再猜测操作系统，端口提示不再暗示 Reality。
+- 以下情况不给结论（`INCONCLUSIVE`，退出码 4）：3 个随机控制端口中有 2 个接受连接、
+  路径检查丢失 50% 以上、超过一半的适用检查无结论、扫描被中断、没有可归因的服务应答。
+- `CLEAN` 的含义是「没有命名签名应答」，不是「DPI 看不到此节点」。每份报告都会列出
+  探测看不到的内容：目标正常的 Reality、Shadowsocks AEAD/2022、没有服务器密钥的
+  WireGuard/AmneziaWG、真实网站后面的 Trojan 或 VLESS。
+- 退出码：0 CLEAN，1 NOISY，2 SUSPICIOUS，3 OBVIOUSLY-VPN，4 INCONCLUSIVE，
+  5 UNRELIABLE，64 用法错误。`ech` 在 DoH 查询失败时返回 4，而不是「没有 HTTPS 记录」。
+- **交互面板**：不带参数运行 `byebyevpn` 会打开全屏面板：方向键选择，Enter 运行，
+  `S` 设置，`L` 上次扫描，`Q` 退出。每一项都显示它会向网络发送什么。
+- 误报测量：[docs/GROUNDTRUTH.md](docs/GROUNDTRUTH.md)、
+  [docs/CALIBRATION.md](docs/CALIBRATION.md)、[docs/TSPU-MODEL.md](docs/TSPU-MODEL.md)。
 
 ### 流水线
 
@@ -101,18 +130,20 @@ Reality / XTLS 静默丢弃所有 8 种；常规 HTTP 返回 400/403。
 服务、在 HTTP-over-TLS 审计中到目标、到 crt.sh）都**不带**任何
 工具特定的头。
 
-对于 `http_get()`（用于 IP-intel 和 crt.sh），请求逐字节如下：
+对于 `http_get()`（用于 IP-intel、crt.sh 和 `ech` 命令的 DoH 查询），
+请求逐字节如下（在 loopback 上抓取）：
 
 ```
 GET /path HTTP/1.1
+Connection: Keep-Alive
 Host: <host>
 ```
 
-**不**发送 `User-Agent`、`Accept`、`Accept-Language`、
-`Accept-Encoding`、`Sec-Fetch-*`、`Upgrade-Insecure-Requests`。
-这些端点接受裸 GET——就像 `curl -sS https://ipwho.is/8.8.8.8`
-不带任何 flag 就能工作一样。若服务器自己选择 gzip，WinHTTP
-仍会透明解压，但我们不宣传支持。
+`Connection: Keep-Alive` 由 WinHTTP 自行添加。`ech` 命令的 Cloudflare
+DoH 备用请求额外带 `Accept: application/dns-json`，其他请求都不带。
+**不**发送 `User-Agent`、`Accept-Language`、`Accept-Encoding`、
+`Sec-Fetch-*`、`Upgrade-Insecure-Requests`。此修复之前的版本还会发送
+`Accept-Encoding: gzip, deflate`。压缩的响应现在会被拒绝，而不是解压。
 
 对于 `https_probe()`（目标 HTTP-over-TLS 审计），头也是最小集
 （`Host`、`Accept: */*`、`Connection: close`）。
@@ -122,26 +153,33 @@ Host: <host>
 [issue #5](https://github.com/pwnnex/ByeByeVPN/issues/5)）。
 
 协议探测（UDP 握手、TLS ClientHello、ICMP）中，任何真实客户端会
-随机化的字段都通过 OpenSSL `RAND_bytes` 填充：OpenVPN session-id
-+ 时间戳偏移、WG 临时密钥、QUIC / Hysteria2 DCID、TLS
-ClientRandom、invalid-SNI 前缀、DNS 事务 ID、L2TP tunnel-id。
+随机化的字段都通过 OpenSSL `RAND_bytes` 填充：WireGuard
+MessageInitiation 主体、AmneziaWG 垃圾前缀和 WG 主体、Hysteria2 QUIC
+DCID、TLS ClientRandom、invalid-SNI 前缀。
 
-ICMP traceroute 载荷是标准 Windows `ping.exe` 字符串
-（`abcdefghi...`，32 字节）——与任何 Windows 主机发送的字节完全相同。
+ICMP traceroute 载荷是 Windows `ping.exe` 的字符串
+（`abcdefghijklmnopqrstuvwabcdefghi`，32 字节）。此修复之前的版本发送
+33 字节（C 字符串结尾的零字节也被发出），任何 Windows 工具都不会这样发送。
+
+uTLS 双探测中的 "chrome" 一侧是手工构造的合成 ClientHello：使用
+X25519MLKEM768 之前的 Chrome 扩展集合，JA4 为
+`t13d1516h2_8daaf6152771_e5627efa2ab1`（FoxIO 规范中的示例值）。它不是
+当前 Chrome 发送的字节：扩展顺序固定（Chrome 每次连接都会打乱），没有
+X25519MLKEM768，也没有 ECH GREASE。请把它当作独立的指纹，而不是浏览器流量。
 
 ### 审计
 
-grep 源码查找工具标识字符串。预期只有三个非网络匹配：
+在模块化源码树中 grep 工具标识字符串。预期只有一个匹配：
+`src/app/cli.cpp` 中 `--help` 的 printf（上限 3，留有余量）：
 
 ```
-$ grep -nE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' src/byebyevpn.cpp
-1:     // ByeByeVPN - full VPN / proxy / Reality detectability analyzer
-...    // http_get 中关于 scrub 的注释
-...    // --help 的 printf
+$ grep -rnE 'ByeByeVPN|BYEBYEVPN|BBVPN|BBV|pwnnex' \
+    src --include='*.cpp' --include='*.h'
+src/app/cli.cpp:131:    printf("ByeByeVPN - full TSPU/DPI/VPN ...
 ```
 
-没有任何一条会到达套接字。CI 工作流
-(`.github/workflows/release.yml`) 会在出现任何额外匹配时使构建失败。
+它不会到达套接字。CI 工作流 (`.github/workflows/release.yml`)
+在匹配超过三个时使构建失败。
 
 ### 安装
 

@@ -9,7 +9,7 @@ using std::vector;
 
 TraceResult trace_hops(const std::string& target_ip, int max_hops) {
     TraceResult r;
-    // resolve once — only IPv4 (ICMP4).
+    // resolve once - only ipv4 (icmp4).
     struct in_addr dst{}; dst.s_addr = 0;
     struct addrinfo hints{}; hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
     struct addrinfo* ai = nullptr;
@@ -26,9 +26,11 @@ TraceResult trace_hops(const std::string& target_ip, int max_hops) {
     HANDLE h = IcmpCreateFile();
     if (h == INVALID_HANDLE_VALUE) return r;
 
-    // standard windows ping payload (32 bytes), identical to what ping.exe sends
-    const char payload[] = "abcdefghijklmnopqrstuvwabcdefghi";
-    const DWORD rcvsz = sizeof(ICMP_ECHO_REPLY) + sizeof(payload) + 8 + 128;
+    // ping.exe payload; sizeof counted the nul, sent 33
+    static constexpr char payload[] = "abcdefghijklmnopqrstuvwabcdefghi";
+    constexpr DWORD payload_len = sizeof(payload) - 1;
+    static_assert(payload_len == 32, "ping.exe sends 32 bytes");
+    const DWORD rcvsz = sizeof(ICMP_ECHO_REPLY) + payload_len + 8 + 128;
     vector<unsigned char> rcv(rcvsz);
 
     int prev_rtt = 0;
@@ -40,7 +42,7 @@ TraceResult trace_hops(const std::string& target_ip, int max_hops) {
         opt.OptionsSize = 0;
         opt.OptionsData = nullptr;
         DWORD n = IcmpSendEcho2(h, nullptr, nullptr, nullptr, dst.s_addr,
-                                (LPVOID)payload, sizeof(payload),
+                                (LPVOID)payload, (WORD)payload_len,
                                 &opt, rcv.data(), (DWORD)rcv.size(), 1500);
         TraceHop hop; hop.ttl = ttl;
         if (n > 0) {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// pure CIDR + clustering logic for the subnet sweep. no networking, no Win32 —
-// compiled into the Linux unit-test build.
+// pure cidr + clustering logic for the subnet sweep. no networking, no win32 -
+// compiled into the linux unit-test build.
 #include "sweep.h"
 
 #include <algorithm>
@@ -56,7 +56,7 @@ bool parse_cidr(const string& cidr, vector<string>& out, int max_hosts, string& 
     uint64_t count = (uint64_t)1 << (32 - prefix);
     if (count > (uint64_t)max_hosts) {
         err = "range too large (" + std::to_string(count) + " hosts, cap " +
-              std::to_string(max_hosts) + ") — use a longer prefix";
+              std::to_string(max_hosts) + "); use a longer prefix";
         return false;
     }
     uint32_t mask    = (prefix == 0) ? 0u : (0xffffffffu << (32 - prefix));
@@ -70,7 +70,7 @@ bool parse_cidr(const string& cidr, vector<string>& out, int max_hosts, string& 
 string sweep_cluster_key(const SweepHost& h) {
     if (!h.open443) return "down";
     if (!h.tls_ok)  return "open443-no-tls";
-    // JA4S ext-hash is the part after the last '_'.
+    // ja4s ext-hash is the part after the last '_'.
     string exthash = h.ja4s;
     size_t u = h.ja4s.rfind('_');
     if (u != string::npos) exthash = h.ja4s.substr(u + 1);

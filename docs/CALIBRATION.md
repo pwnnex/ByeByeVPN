@@ -357,6 +357,13 @@ checks, the socks5 signal and the ports, exit 2.
 Same tree: unit 257/257 (8763 checks), Python 9/9, cppcheck 0 and
 clang-tidy 0 on the new modules.
 
+## 2026-10-01, v3.2.0
+
+Run `release-v3.2.0` on a clean rebuild of the release tree. 0 FP in every
+row, 38 of 38 runs inside their accepted labels or expected outcome, exit
+0; J came out CLEAN this time, which it may. No long dash in any saved
+output. Unit 257/257 (8763 checks), Python 9/9, imports only system DLLs.
+
 ## Field log
 
 Your own nodes: date, scanner version, verdict, what happened to the node

@@ -9,7 +9,7 @@
 
 // version shared by the banner, json and saved reports
 // keep `VERSION` in `Makefile` in sync
-#define SCANNER_VERSION "v3.0.0"
+#define SCANNER_VERSION "v3.2.0"
 
 // port-scan mode (driven by --full / --fast / --range / --ports)
 enum class PortMode { FULL, FAST, RANGE, LIST };

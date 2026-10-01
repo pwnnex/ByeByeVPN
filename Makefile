@@ -141,7 +141,7 @@ static: $(OBJ)
 #
 # must match SCANNER_VERSION in src/common/config.h - that macro is what the
 # banner, the --json report and the --save header actually print.
-VERSION ?= v3.0.0
+VERSION ?= v3.2.0
 ZIP_NAME = $(BIN)-$(VERSION)-win64.zip
 
 release-zip: windows-static

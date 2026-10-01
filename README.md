@@ -12,7 +12,7 @@
 |____/ \__, |\___|____/ \__, |\___| \_/  |_|   |_| \_|
        |___/            |___/
   ──────────────────────────────────────────────────────
-  v3.0.0  ·  your node through a DPI box's eyes
+  v3.2.0  ·  your node through a DPI box's eyes
   ──────────────────────────────────────────────────────
 ```
 
@@ -354,7 +354,7 @@ matches appear.
 
 ### Install
 
-Windows: download `byebyevpn-v3.0.0-win64.zip` from
+Windows: download `byebyevpn-v3.2.0-win64.zip` from
 [Releases](../../releases), extract, run `byebyevpn.exe` - either
 double-click for the interactive panel, or pass an IP/hostname from
 the terminal.
@@ -406,7 +406,7 @@ Run `byebyevpn` with no arguments (or double-click it) for a full-screen
 panel:
 
 ```
-  ● byebyevpn v3.0.0   your node through a DPI box's eyes
+  ● byebyevpn v3.2.0   your node through a DPI box's eyes
  machine  ● direct via Ethernet   public targets pass preflight
 ╭─ menu ──────────────────────╮╭─ SCAN ─────────────────────────────────────────╮
 │ SCAN                        ││ Full scan                                      │
@@ -1053,7 +1053,7 @@ CI workflow (`.github/workflows/release.yml`) проваливает сборк�
 
 ### Установка
 
-Windows: скачать `byebyevpn-v3.0.0-win64.zip` со страницы
+Windows: скачать `byebyevpn-v3.2.0-win64.zip` со страницы
 [Releases](../../releases), распаковать, запустить `byebyevpn.exe`
 (двойной клик = интерактивная панель, либо IP/hostname из терминала).
 

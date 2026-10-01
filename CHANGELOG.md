@@ -1,6 +1,12 @@
 # Changelog
 
-## unreleased
+## v3.2.0 - 2026-10-01
+
+Client-side and offline additions; the server scan, its verdict and its
+exit codes are unchanged since v3.0.0. The work planned as 3.1
+(`dpi --real`, `names --ct`, client and pair audit) ships here too.
+`local` now exits 2 when IPv6 or DNS leaves beside the tunnel, where it
+used to exit 0 always.
 
 ### new: `pcap`, your own client capture as the box reads it
 

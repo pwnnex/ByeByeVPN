@@ -73,6 +73,8 @@ set(BBVPN_SOURCES
     src/scan/amnezia_probe.cpp
     src/scan/awg_entropy.cpp
     src/scan/awg_capture.cpp
+    src/scan/capture.cpp
+    src/scan/pcap_analysis.cpp
     src/scan/quic.cpp
     src/scan/grpc.cpp
     src/scan/transport_probe.cpp
@@ -85,6 +87,7 @@ set(BBVPN_SOURCES
     src/scan/ech_query.cpp
 
     src/local/local.cpp
+    src/local/leaks.cpp
 
     src/app/target.cpp
     src/app/orchestrator.cpp
@@ -99,6 +102,9 @@ set(BBVPN_SOURCES
     src/app/tui_layout.cpp
     src/app/hostname_analysis.cpp
     src/app/awg_analysis.cpp
+    src/app/pcap_cli.cpp
+    src/app/report_diff.cpp
+    src/app/batch.cpp
 )
 
 add_executable(byebyevpn ${BBVPN_SOURCES})

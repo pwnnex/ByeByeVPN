@@ -65,6 +65,8 @@ extern bool        g_names_ct;
 extern std::string g_ct_file;
 extern bool        g_resolve;
 extern std::string g_node_ip;
+// batch: directory for one --json report per target
+extern std::string g_batch_out;
 
 // --json: emit a machine-readable json report on stdout. when set, the
 // human-readable scan output is redirected to stderr so stdout carries

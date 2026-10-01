@@ -42,6 +42,8 @@ is a subset of what the classifier acts on.
 | F9 | Fully-encrypted first packet heuristics (entropy, printable ratio, length) | first packets | passive | guess for TSPU, documented for GFW |
 | F10 | SNI and IP mismatch: brand SNI to an address outside the brand's ASN | handshake + L3 | passive | field reports on Reality with brand targets, mechanism unconfirmed |
 | F11 | Server answers to unauthenticated probes (proxy handshakes, VPN setup) | server behaviour | active only | inferred |
+| F12 | A TLS handshake carried inside an encrypted flow, read from the sizes and timing of the first records | flow shape | passive | documented for the GFW (Xue et al., USENIX Security 2024); guess for TSPU |
+| F13 | DNS names sent in the clear, matched against lists, answers replaced | DNS | passive | field for operator resolvers; inferred for port 53 to outside resolvers |
 
 ## 3. How a decision is made
 
@@ -75,6 +77,8 @@ reader, not a model of the box. Consequences for the verdict engine:
 | F9 entropy | no | passive property of client traffic |
 | F10 SNI/IP mismatch | partly from the server side; yes from the owner's client with `dpi --sni --real` | the scan sees which certificate the address serves; the ASN comes from GeoIP. From the client, the same name sent to the node and to the address it really lives on tells whether this path ties the name to its address (lab-verified on an emulated box only) |
 | F11 | yes | this is exactly what the scan does |
+| F12 TLS inside TLS | no from the server; yes from the owner's capture with `pcap` | the pattern lives in client traffic. `pcap` applies a size rule calibrated on real xray: VLESS and Trojan over TLS without Vision match 4 of 4 flows, Vision and plain HTTPS 0 of 4 (lab PV, PT, PX, PH). Whether the box acts on it is a guess, the tool only shows that it is there |
+| F13 DNS | no from the server; yes from a capture (`pcap`) and from the machine's settings (`local`) | names in the clear are what the box reads before any tunnel matters. `local` asks the resolvers the system would use beside the tunnel; a capture shows what really left |
 
 Conclusion that drives the whole tool: **CLEAN from an active scan means
 "no answering signature", never "invisible to the box".** Reality with a
@@ -109,3 +113,7 @@ stand A byte for byte.
 2. Does any active scanning by the operator side exist at scale, and what
    does it probe? If yes, F6/F11 matter more than this model assumes.
 3. F9 on TSPU: no direct evidence. Must not be scored until there is.
+4. F12 on TSPU: the GFW result shows it can be done at line rate; nothing
+   public shows TSPU doing it. `pcap` marks the pattern on the owner's own
+   traffic; field logs should record whether nodes with a positive there
+   are blocked sooner than Vision nodes on the same operator.

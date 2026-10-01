@@ -38,6 +38,9 @@ udp-probe-tests.exe
 web-probe-tests.exe
 fuzz_ja4
 fuzz_ja4.exe
+fuzz_pcap
+fuzz_pcap.exe
+fuzz-pcap-work/
 byebyevpn-sbom.json
 byebyevpn-*-SHA256SUMS.txt
 *.minisig

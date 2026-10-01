@@ -132,6 +132,27 @@ connection silently for that name:
 
 Matrix row `sni-address` counts these the same way.
 
+Client captures for `pcap` (`tools/groundtruth/capture_lab.py`, run by
+`run.py` after the stands are down). A real xray client (dokodemo inbound)
+talks to a real xray server through a relay that forwards every chunk and
+writes it, with its time, into a pcap (client 192.0.2.10, node
+203.0.113.5). The inner client is Python's OpenSSL doing TLS 1.3 to a lab
+origin through the tunnel, four connections per case:
+
+| run | capture | what flows | expected `inner-handshake` |
+|---|---|---|---|
+| PV | vless-tls | VLESS over TLS, no flow | positive |
+| PT | trojan-tls | Trojan over TLS | positive |
+| PX | vless-vision | VLESS over TLS, flow xtls-rprx-vision | negative |
+| PH | plain-https | the same client straight to the origin, three browser-sized requests per connection (keep-alive) | negative |
+
+xray 26 needs two settings the older lab did not: the client pins the lab
+certificate with `pinnedPeerCertSha256` (`allowInsecure` is gone), and the
+server's freedom outbound allows the lab origin in `finalRules` (private
+targets are blocked by default behind VLESS and Trojan). Rows
+`pcap-dns-clear` and `pcap-outside-node` check that no tunnel capture is
+said to hold cleartext DNS or traffic beside the node.
+
 ## Where the lab disagrees with first expectations
 
 The first plan expected a detection on C, E and F, a tier A hit on E and
@@ -165,6 +186,11 @@ the report now prints on every scan.
 - GeoIP is off (`--no-geoip`): loopback has no ASN. GeoIP false positives
   were measured separately with `byebyevpn geoip` on known hosting
   addresses (see CALIBRATION.md).
+- The capture relay records `recv()` chunks, not packets on a wire; segment
+  boundaries and timing are loopback's. Only the record sizes and their
+  order matter to `pcap`, and those are the client's and the server's own.
+- `local` leak checks need a machine with a tunnel client; they are tested
+  on decision logic (test_leaks.cpp) and on one machine, not in the lab.
 - No Linux targets, no real SSTP server. The only QUIC server is xray's
   Hysteria2 (quic-go); HTTP/3 servers built on other stacks (msquic,
   quiche, ngtcp2) are not in the lab.
@@ -182,4 +208,6 @@ the report now prints on every scan.
 | quic-endpoint | JSON note `quic-endpoint` or a printed QUIC classification line, true on Q only |
 | volume-freeze | `dpi --volume` outcome positive, true on VZ only; inconclusive and not applicable count as INC |
 | sni-address | `dpi --sni --real` outcome positive, true on SM only; inconclusive counts as INC |
+| inner-handshake | `pcap --node` per-server outcome positive, true on PV and PT |
+| pcap-dns-clear, pcap-outside-node | `pcap` said DNS in the clear or traffic beside the node on a tunnel capture; false on every capture |
 | silent-on-junk-claim | informational, counts the old "silent-on-junk" verdict line |

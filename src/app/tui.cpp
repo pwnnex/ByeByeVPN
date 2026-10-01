@@ -170,8 +170,10 @@ const Item ITEMS[] = {
     {"THIS MACHINE", "Machine check", Act::Machine,
      "Is this machine fit to measure? Tunnel on the route, local ack-all stack, packet rewriters, proxies, external address.",
      "1 SYN to 192.0.2.1 (only on the default route), 3 external-address lookups unless GeoIP is off."},
-    {"THIS MACHINE", "Adapters and routes", Act::Local, "Adapters, default routes, full or split tunnel, VPN processes, config folders.",
-     "Nothing."},
+    {"THIS MACHINE", "Adapters, routes, leaks", Act::Local,
+     "Adapters, default routes, full or split tunnel, VPN processes, config folders, IPv6 and DNS leaving beside the tunnel.",
+     "Nothing without a tunnel. With one: two TCP connects to public IPv6 resolvers (only with global IPv6 beside it) "
+     "and two example.com queries to each resolver beside it."},
     {"PANEL", "Settings", Act::Settings, "Port range, timeouts, stealth, lookups, saving reports, preflight override.", "Nothing."},
     {"PANEL", "Last full scan", Act::Last, "The verdict block of the most recent full or quick scan in this session.", "Nothing."},
     {"PANEL", "Help (all flags)", Act::Help, "The --help text.", "Nothing."},

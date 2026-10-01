@@ -47,6 +47,12 @@ Status values:
 | 30 | Names under the owner's domain in public CT logs, and which share an address | none (what any observer can list) | scan/ct_names.cpp, `names --ct` | test_ct_names.cpp, tests/fixtures/ct | ref; network only to crt.sh, or none with `--ct-file` |
 | 31 | Client config: plaintext, missing browser fingerprint, missing SNI, disabled certificate checks, malformed REALITY key or shortId | F3 (the ClientHello the box reads) | app/config_audit.cpp `client-*` | tests/fixtures/audit `client-*` | offline |
 | 32 | Server and client configs that cannot connect: port, protocol, transport, security, path, user, flow, REALITY serverName, shortId, key pair | none (breakage, not observability) | app/config_audit.cpp `pair-*`, `audit-config <server> <client>` | tests/fixtures/audit `pair-*` | offline, compatibility |
+| 33 | The ClientHello the owner's client sends: SNI, JA4 (TCP and QUIC), GREASE, ECH extension, post-quantum share, ALPN | F3, F4 | scan/pcap_analysis.cpp, `pcap` | test_pcap.cpp; PV, PX, PT, PH | wire (capture), ref |
+| 34 | A TLS handshake inside the tunnel, from the sizes of the first flights | F12 | scan/pcap_analysis.cpp, `pcap --node` | PV, PT positive; PX (Vision), PH (plain HTTPS keep-alive) negative; test_pcap.cpp | wire (real xray on loopback), client side |
+| 35 | DNS queries in the clear in a capture | F13 | scan/pcap_analysis.cpp, `pcap` | test_pcap.cpp, test_offline_cli.py; row pcap-dns-clear | wire (capture), client side |
+| 36 | Traffic beside the node in a capture, IPv6 included | F1, F3 on the flows beside it | scan/pcap_analysis.cpp, `pcap --node` | test_pcap.cpp, test_offline_cli.py; row pcap-outside-node | wire (capture), client side |
+| 37 | IPv6 leaving beside the tunnel on this machine | F1, F3 on the flows beside it | local/leaks.cpp, `local` | test_leaks.cpp; one machine | unit; live on one machine |
+| 38 | DNS resolvers asked beside the tunnel on this machine | F13 | local/leaks.cpp, `local` | test_leaks.cpp; one machine | unit; live on one machine |
 
 Rows 27 to 29 come from the offline audit: the input is a file, nothing
 goes on the wire, and a false positive can only come from a logic error.
@@ -61,6 +67,12 @@ owner passes the WireGuard keys. Rows 12, 14 and 19 are exactly where real
 nodes get blocked and stay out of reach by design; the report names them on
 every run. Row 21 is measurable only from the owner's own client
 (`dpi --volume`), for that client's path at that moment.
+
+Rows 33 to 38 look at the owner's own client: a capture file or this
+machine's settings. They never enter the scan verdict. Row 34 is the
+closest the tool gets to what the box reads in flight; it is a size rule,
+so a negative means "these flows do not carry this pattern", not
+"invisible".
 
 Not covered, with the reason:
 

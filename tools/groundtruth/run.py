@@ -15,6 +15,7 @@ import sys
 import time
 from collections import defaultdict
 
+import capture_lab
 import lab
 
 # legacy builds print signal text only; map the stable prefixes to ids
@@ -235,7 +236,7 @@ def run_client(exe, case, outdir, timeout):
     return dict(name=name, ip=ip, row=row, outcome=client_label(so), expected=expected, code=code, secs=dt)
 
 
-def client_matrix(vres, cells, rows):
+def client_matrix(vres, cells, rows, kind="dpi"):
     for v in vres:
         c = cells[v["row"]]
         fired, truth = v["outcome"] == "positive", v["expected"] == "positive"
@@ -245,8 +246,63 @@ def client_matrix(vres, cells, rows):
             c["TP" if truth else "FP"] += 1
         else:
             c["FN" if truth else "TN"] += 1
-        rows.append((v["name"], v["ip"], v["outcome"], None, "dpi " + v["row"], "-", v["code"], v["secs"],
+        rows.append((v["name"], v["ip"], v["outcome"], None, kind + " " + v["row"], "-", v["code"], v["secs"],
                      v["outcome"] == v["expected"]))
+
+# pcap runs on captures recorded through real xray (capture_lab.py):
+# name, group, matrix row, capture, expected inner-handshake outcome
+PCAP_CASES = [
+    ("PV", "PCAP", "inner-handshake", "vless-tls", "positive"),
+    ("PX", "PCAP", "inner-handshake", "vless-vision", "negative"),
+    ("PT", "PCAP", "inner-handshake", "trojan-tls", "positive"),
+    ("PH", "PCAP", "inner-handshake", "plain-https", "negative"),
+]
+
+
+def pcap_label(so):
+    try:
+        rep = json.loads(so)
+    except ValueError:
+        return "?", "?", "?"
+    node = [s for s in rep.get("inner_handshake", [])
+            if s.get("server", "").startswith(capture_lab.PCAP_NODE_TEXT + ":")]
+    inner = node[0].get("outcome", "?") if node else "not applicable"
+    return inner, rep.get("dns", {}).get("outcome", "?"), rep.get("outside_node", {}).get("outcome", "?")
+
+
+def run_pcap(exe, case, path, outdir, timeout):
+    name, _, row, capture, expected = case
+    cmd = [exe, "pcap", path, "--node", capture_lab.PCAP_NODE_TEXT, "--json", "--no-color"]
+    t0 = time.monotonic()
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=timeout, stdin=subprocess.DEVNULL)
+        code, so, se = r.returncode, r.stdout, r.stderr
+    except subprocess.TimeoutExpired:
+        code, so, se = -1, "", "[timeout]"
+    dt = time.monotonic() - t0
+    with open(os.path.join(outdir, name + ".json"), "w", encoding="utf-8") as f:
+        f.write(so)
+    with open(os.path.join(outdir, name + ".txt"), "w", encoding="utf-8") as f:
+        f.write(se)
+    inner, dns, outside = pcap_label(so)
+    return dict(name=name, ip=capture, row=row, outcome=inner, expected=expected, code=code, secs=dt,
+                dns=dns, outside=outside)
+
+
+def pcap_matrix(pres, cells, rows):
+    client_matrix(pres, cells, rows, "pcap")
+    # tunnel captures hold no dns and nothing beside the node
+    for v in pres:
+        for row, got in (("pcap-dns-clear", v["dns"]), ("pcap-outside-node", v["outside"])):
+            c = cells[row]
+            if got == "positive":
+                c["FP"] += 1
+            elif got == "negative":
+                c["TN"] += 1
+            else:
+                c["INC"] += 1
+
 
 def annotate(msg):
     # actions turns these into annotations, readable without a login
@@ -319,8 +375,16 @@ def main():
             if os.path.isfile(js) and (not a.only or c[0] in a.only.split(",")):
                 vres.append(dict(name=c[0], ip=client_ip(c[3]), row=c[2], expected=c[5], code="?", secs=0.0,
                                  outcome=client_label(open(js, encoding="utf-8").read())))
+        pres = []
+        for c in PCAP_CASES:
+            js = os.path.join(outdir, c[0] + ".json")
+            if os.path.isfile(js) and (not a.only or c[0] in a.only.split(",")):
+                inner, dns, outside = pcap_label(open(js, encoding="utf-8").read())
+                pres.append(dict(name=c[0], ip=c[3], row=c[2], expected=c[4], code="?", secs=0.0,
+                                 outcome=inner, dns=dns, outside=outside))
         cells, rows = matrix(results)
         client_matrix(vres, cells, rows)
+        pcap_matrix(pres, cells, rows)
         md = render(a.tag + " (rescored)", exe, cells, rows, {"rescored": "same rules as a fresh run"})
         with open(os.path.join(outdir, "matrix.md"), "w", encoding="utf-8") as f:
             f.write(md)
@@ -365,8 +429,26 @@ def main():
             vres.append(v)
     finally:
         lab.stop_all(st, procs)
+    # own processes and addresses, after the stands are down
+    pres = []
+    pcases = [c for c in PCAP_CASES if not a.only or c[0] in a.only.split(",")]
+    if pcases:
+        lab.log("recording client captures through xray")
+        paths, pnotes, _ = capture_lab.record(os.path.join(outdir, "captures"))
+        notes.update(("capture " + k, v) for k, v in pnotes.items())
+        for c in pcases:
+            if c[3] not in paths:
+                skipped.append(c[0])
+                notes["skipped"] = " ".join(skipped)
+                continue
+            lab.log("pcap %s %s (%s)" % (c[0], c[2], c[3]))
+            v = run_pcap(exe, c, paths[c[3]], outdir, a.timeout)
+            lab.log("  %s outcome=%s expected=%s dns=%s outside=%s exit=%s" % (
+                v["name"], v["outcome"], v["expected"], v["dns"], v["outside"], v["code"]))
+            pres.append(v)
     cells, rows = matrix(results)
     client_matrix(vres, cells, rows)
+    pcap_matrix(pres, cells, rows)
     md = render(a.tag, exe, cells, rows, notes)
     with open(os.path.join(outdir, "matrix.md"), "w", encoding="utf-8") as f:
         f.write(md)
@@ -374,7 +456,8 @@ def main():
     if skipped and a.require_all:
         lab.log("stands not started: %s" % " ".join(skipped))
         annotate("stands not started: %s (%s)" % (" ".join(skipped), "; ".join(
-            "%s: %s" % (k, v) for k, v in notes.items() if k in ("xray", "Q", "bind failed"))))
+            "%s: %s" % (k, v) for k, v in notes.items()
+            if k in ("xray", "Q", "bind failed") or k.startswith("capture"))))
         return 1
     return gate(cells, rows)
 

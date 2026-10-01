@@ -95,3 +95,12 @@ QuicResponse quic_parse_response(const std::vector<uint8_t>& datagram);
 bool quic_unprotect_client_initial(const std::vector<uint8_t>& datagram,
                                    const std::vector<uint8_t>& dcid,
                                    std::vector<uint8_t>& crypto_out);
+
+// a client Initial seen in a capture: v1 only, keys from its own dcid.
+// crypto frames come back with their offsets, padding, ping and ack are
+// skipped. false when the datagram is not a client v1 Initial or the tag
+// check fails (server Initials fail here, they use other keys).
+struct QuicCryptoPiece { uint64_t offset = 0; std::vector<uint8_t> data; };
+bool quic_client_initial_crypto(const std::vector<uint8_t>& datagram,
+                                std::vector<uint8_t>& dcid,
+                                std::vector<QuicCryptoPiece>& pieces);

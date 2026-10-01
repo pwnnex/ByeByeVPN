@@ -13,6 +13,8 @@ struct LocalAdapter {
     std::vector<std::string> ipv4;
     std::vector<std::string> ipv6;
     std::vector<std::string> gateways;
+    std::vector<std::string> dns;      // configured resolvers
+    unsigned long metric   = 0;        // ipv4 interface metric
     unsigned long mtu      = 0;
     unsigned long if_index = 0;
     unsigned long if_type  = 0;
@@ -55,5 +57,6 @@ bool routes_cover_default(const std::vector<std::string>& prefixes_v4);
 // interface windows would use to reach ip, 0 when unknown
 unsigned long best_interface_for(const std::string& ip);
 
-// pretty-print the whole local report.
-void run_local_analysis();
+// pretty-print the whole local report. 2 when ipv6 or dns leaves beside
+// the tunnel, 0 otherwise.
+int run_local_analysis();

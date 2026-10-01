@@ -38,6 +38,7 @@ bool        g_names_ct = false;
 std::string g_ct_file;
 bool        g_resolve = false;
 std::string g_node_ip;
+std::string g_batch_out;
 
 PortMode         g_port_mode = PortMode::FULL;
 int              g_range_lo  = 1;

@@ -88,6 +88,7 @@ int main(int argc, char** argv) {
         else if (a == "--resolve")                   g_resolve        = true;
         else if (a == "--node"      && i + 1 < argc) { g_node_ip = argv[++i]; g_resolve = true; }
         else if (a == "--real"      && i + 1 < argc) g_dpi_real       = argv[++i];
+        else if (a == "--out"       && i + 1 < argc) g_batch_out      = argv[++i];
         else if (a == "--wg-port"   && i + 1 < argc) {
             int p = std::atoi(argv[++i]);
             if (p > 0 && p < 65536) g_wg_port = p;

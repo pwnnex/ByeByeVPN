@@ -3,7 +3,7 @@
 One entry per signal that can change the score or the tier, plus the
 reference outputs people most often read as findings. The registry in
 `src/app/signals.cpp` must match this file: an id without a passport never
-reaches `evaluate_report()`. Model references (F1..F11) point to
+reaches `evaluate_report()`. Model references (F1..F13) point to
 [TSPU-MODEL.md](TSPU-MODEL.md); test cases point to
 [GROUNDTRUTH.md](GROUNDTRUTH.md).
 
@@ -125,6 +125,76 @@ silent drop next to a working benign SNI, negative for a TLS reply to the
 target SNI, inconclusive otherwise, not applicable through a fake-IP
 tunnel. Exit codes unchanged; `--json` added; the scope sentence is printed.
 
+### inner-handshake (`pcap <file> --node IP`)
+
+| field | value |
+|---|---|
+| claim | in the owner's own capture, flows to one server carry the sizes of a TLS handshake inside the outer TLS: the tunnel forwards the inner handshake record for record (F12) |
+| evidence | per TCP flow after the outer handshake, in plaintext bytes (record length minus the outer AEAD overhead: 17 for TLS 1.3, 24 for TLS 1.2 GCM, 16 for ChaCha20): the first client flight 280 B or more (an inner ClientHello plus a proxy header), the server's answer 600 B or more (an inner server flight with a certificate), then a client record of exactly 58, 64, 74 or 80 B: an inner TLS 1.3 Finished, alone or after a ChangeCipherSpec, SHA-256 or SHA-384 |
+| how it is measured | offline on a pcap or pcapng file: TCP rebuilt per direction (first 64 KB), TLS records walked from the stream start, flights ordered by capture time. Nothing is sent |
+| false-positive modes | (1) plain HTTPS with keep-alive puts the next request where the Finished would be; lab PH sends browser-sized requests (first flight 492 B, answer 12.5 KB) and stays negative because the next request is 492 B. (2) an HTTP client whose next message is exactly 58, 64, 74 or 80 B after a large request and a large answer: not closable by sizes; two matching flows to the same server are required, which a client repeating one request byte for byte would also produce. (3) tickets and server-first bytes: server records before the first client data are skipped. (4) TLS 1.3 client certificates: the outer Finished is not where expected, the flow is not checked. (5) TLS 1.2 CBC suites: overhead unknown, not checked |
+| control | flows without the pattern print their sizes; a negative needs two checked flows |
+| repeats | per server: positive at two matching flows, negative at two checked flows and none matching, one match is inconclusive. Each flow is an observation; a flow without the pattern does not contradict one with it, they carry different content |
+| inconclusive when | fewer than two checked flows; one match only |
+| outcome and exit | `pcap` exits 2 when inner-handshake, dns-clear or outside-node is positive, 0 otherwise, 64 on a file it cannot read |
+| model | F12 |
+| test | PV (VLESS over TLS, 4 of 4), PT (Trojan over TLS, 4 of 4) positive; PX (VLESS with Vision, 0 of 4) and PH (plain HTTPS, 0 of 4) negative; real xray 26.7.28 through a recording relay; test_pcap.cpp |
+| limits | sizes only, no timing model. A client that sends its first request in the same burst as its Finished hides the pattern from this rule, not from a box that models timing. Inner TLS 1.2 and resumed inner sessions without a certificate flight are not modelled. Vision pads exactly the records this rule reads; a box with a better model may still separate it |
+
+### dns-clear (`pcap`)
+
+| field | value |
+|---|---|
+| claim | the capture holds DNS queries in the clear |
+| evidence | a message to port 53, UDP or TCP, with QR 0, opcode 0, one to four questions and a name that parses |
+| false-positive modes | (1) a capture taken inside the tunnel shows the tunnel's own resolver (fake-ip 198.18.0.0/15 is flagged in the text); capture on the physical interface. (2) mDNS and LLMNR are not port 53 and are ignored. (3) queries to the router for LAN names: still in the clear on that link, marked lan |
+| repeats | positive at two queries, one is inconclusive, none among 20 or more packets is negative |
+| model | F13; F3 for the names a DoH ClientHello carries |
+| test | test_pcap.cpp, test_offline_cli.py; row pcap-dns-clear (negative on all four tunnel captures) |
+| limits | DoH, DoT and DoQ hide the names, not the resolver: DoT shows as a peer on 853, DoH to well-known resolver names is marked from the SNI |
+
+### outside-node (`pcap --node IP`)
+
+| field | value |
+|---|---|
+| claim | the capture holds public traffic to addresses other than the node |
+| evidence | two or more packets, TCP or UDP, IPv4 or IPv6, to addresses that are not the node and not private, loopback, link-local or multicast |
+| false-positive modes | (1) split tunnelling set up on purpose: true but intended; the list shows where it goes. (2) the tunnel client's own bootstrap traffic (resolving the node name, time sync): real traffic beside the node. (3) a capture taken inside the tunnel: the node never appears, the result is inconclusive, not positive |
+| control | the node must appear in the capture |
+| repeats | positive at two packets, one is inconclusive, none with the node present is negative |
+| model | F1 and F3 apply to every flow beside the tunnel as to any other |
+| test | test_pcap.cpp, test_offline_cli.py; row pcap-outside-node (negative on all four tunnel captures) |
+| limits | CGNAT 100.64.0.0/10 counts as public |
+
+### ipv6-leak (`local`)
+
+| field | value |
+|---|---|
+| claim | with a tunnel adapter up, connections to public IPv6 addresses leave through another adapter |
+| evidence | a global (2000::/3) address on a non-tunnel adapter, then a TCP connect to `[2606:4700:4700::1111]:443` and `[2001:4860:4860::8888]:443` whose local address belongs to that adapter |
+| how it is sent | a plain connect the system makes for any app, closed at once, no payload. No packet at all when there is no global IPv6 beside the tunnel |
+| false-positive modes | (1) a kill switch blocking IPv6 beside the tunnel: the connect fails or times out, never positive. (2) the tunnel carries IPv6 itself: the local address is the tunnel's, negative. (3) IPv6 left direct on purpose: true but intended. (4) a tunnel adapter with a name the tool does not know looks like an outside one; the adapter list shows the [VPN] tags |
+| repeats | two targets, two agreeing results (`combine_observations`) |
+| inconclusive when | a connect times out; the targets disagree |
+| outcome and exit | `local` exits 2 when ipv6-leak or dns-leak is positive, 0 otherwise |
+| model | F1 and F3 on the flows beside the tunnel |
+| test | test_leaks.cpp; one machine with a TUN client and no global IPv6 beside it: negative without packets |
+| limits | Windows only. The system's choice for two addresses at this moment; an app that binds to an interface itself can differ |
+
+### dns-leak (`local`)
+
+| field | value |
+|---|---|
+| claim | with a tunnel adapter up, the system resolver would ask a resolver beside the tunnel, and that resolver answers there |
+| evidence | resolvers from the adapter settings; Windows asks every adapter's resolvers in parallel unless the DisableSmartNameResolution policy is 1, otherwise the lowest metric first. Resolvers routed into the tunnel are skipped. Up to three are asked twice for `example.com` A with a random id; an answer with the same id and QR set counts |
+| false-positive modes | (1) a kill switch dropping port 53 beside the tunnel: silence (inconclusive) or a refused send (negative), never positive. (2) Windows DoH set for that resolver: the system's own queries are encrypted while ours gets an answer; check with `pcap`. (3) a tunnel client that answers port 53 on every interface: the answer is the client's, not the resolver's; check with `pcap` on the physical interface |
+| control | the system setting says whether the resolver would be used; the answer says the path is open |
+| repeats | two queries per resolver, positive at two answers |
+| inconclusive when | silence; one answer |
+| model | F13 |
+| test | test_leaks.cpp; one machine with a TUN client: the LAN resolver stays silent, inconclusive |
+| limits | Windows only. Two benign queries per resolver leave beside the tunnel by design, that is the measurement. Apps with their own resolver (browser DoH) are not seen |
+
 ## Reference only (never scored)
 
 ### geoip-tags
@@ -190,6 +260,19 @@ under the hex dump called any QUIC-shaped datagram "QUIC Initial packet"
 even when the ids were someone else's, and that the version-negotiation
 probe went to the first port that sent any bytes; both now require the
 same validation as the note.
+
+### client-hello (`pcap`)
+
+What the owner's client sends before any key: SNI, JA4 (`t` over TCP, `q`
+from a decrypted QUIC Initial), GREASE, the encrypted_client_hello
+extension, a post-quantum hybrid group (X25519MLKEM768 and relatives) and
+ALPN. Facts, not a verdict. No GREASE means not Chromium or Safari (Firefox,
+Go, OpenSSL send none). `ech-ext yes` can be GREASE ECH: Chromium sends the
+extension with the real name in the clear when it has no ECH config, so the
+box still reads the SNI. On the lab captures the xray client shows uTLS
+Chrome (`t13d1516h2_8daaf6152771_d8a2da3f94cd`, GREASE, ECH extension,
+X25519MLKEM768) and the plain Python client OpenSSL 3.5
+(`t13d1712h1_ab0a1bf427ad_8e6e362c5eac`, no GREASE). Model F3, F4.
 
 ### ct-names (`names <domain> --ct`)
 

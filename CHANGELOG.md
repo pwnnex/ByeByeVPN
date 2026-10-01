@@ -2,6 +2,40 @@
 
 ## unreleased
 
+### new: `pcap`, your own client capture as the box reads it
+
+`pcap <file> [--node IP]` reads a pcap or pcapng of your own client and
+sends nothing. It prints every ClientHello (SNI, JA4 over TCP, JA4 from
+the decrypted QUIC Initial, GREASE, the ECH extension, a post-quantum key
+share, ALPN), checks each server for a TLS handshake carried inside the
+tunnel from the sizes of the first flights (an inner ClientHello, a
+certificate flight, then a record of exactly an inner TLS 1.3 Finished;
+two matching flows for a positive), lists DNS queries sent in the clear
+and, with `--node`, public traffic beside the node. Calibrated on real
+xray 26.7.28 through a recording relay: VLESS and Trojan over TLS match 4
+of 4 flows, Vision and plain HTTPS keep-alive 0 of 4 (lab PV, PT, PX, PH,
+new rows `inner-handshake`, `pcap-dns-clear`, `pcap-outside-node`). Exit
+2 when something is readable, 0 otherwise. The pcap reader is shared with
+`awg-entropy` and fuzzed in CI.
+
+### new: IPv6 and DNS leaks in `local`
+
+With a tunnel adapter up, `local` checks whether IPv6 to public addresses
+leaves through another adapter (a connect to two public resolvers, the
+local address the system picked, two agreeing) and whether the system
+resolver would ask a resolver beside the tunnel that answers there
+(Windows parallel queries read from policy, two queries per resolver). A
+kill switch reads as blocked, never as a leak; silence stays
+inconclusive. Exit 2 on a leak.
+
+### new: `batch` and `diff` for several nodes
+
+`batch nodes.txt [--out DIR]` runs the full scan on every node in the file
+and ends with a summary table; `--out` keeps one `--json` report per node.
+`diff` compares two reports or two such directories: verdict, open ports,
+certificates, JA4S, GeoIP tags. Exit 2 when a verdict changed, 1 for any
+other change, 0 for none.
+
 ### new: `dpi --sni NAME --real IP|auto`
 
 The name your node serves goes to the node and to the address the name

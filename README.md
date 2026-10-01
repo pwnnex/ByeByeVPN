@@ -321,6 +321,13 @@ and SSTP setup requests are repeated until two agree (at most three);
 a WireGuard or AmneziaWG probe that gets a reply is sent twice more.
 Every connect is made with SYN retransmission off (`SIO_TCP_INITIAL_RTO`).
 
+`local` sends nothing unless a tunnel adapter is up. Then, only when a
+non-tunnel adapter holds a global IPv6 address, one TCP connect each to
+`[2606:4700:4700::1111]:443` and `[2001:4860:4860::8888]:443`, closed at
+once with no payload; and to each resolver the system would use beside the
+tunnel (at most three), two standard queries for `example.com` A with a
+RAND_bytes id. `pcap`, `diff` and `audit-config` read files only.
+
 TLS clients no longer put an IP literal into SNI (RFC 6066 section 3): with
 an IP target the OpenSSL probes send no SNI, the synthetic Chrome-style
 hello omits `server_name` (so its JA4 starts `t13i`), and the SSTP request
@@ -380,10 +387,13 @@ byebyevpn j3 my.server.ru 443    # j3 active probing
 byebyevpn geoip 8.8.8.8          # geoip aggregation
 byebyevpn snitch my.server.ru    # rtt vs geo (methodika §10.1)
 byebyevpn trace my.server.ru     # icmp hop-count
-byebyevpn local                  # scan this machine
+byebyevpn local                  # scan this machine, IPv6 and DNS leaks included
 byebyevpn audit-config cfg.json  # identify configured protocols and audit settings
 byebyevpn sweep 1.2.3.0/24       # cluster a subnet by TLS fingerprint (v2.8.0)
 byebyevpn names sub.mysite.ru    # does the NAME give you away? offline, no packets
+byebyevpn pcap client.pcapng --node 1.2.3.4   # your own capture as the box reads it
+byebyevpn batch nodes.txt --out today         # every node in the file, one report each
+byebyevpn diff yesterday today   # what changed per node, offline
 ```
 
 Every command that sends packets to a target (`scan`, `ports`, `udp`,
@@ -533,6 +543,72 @@ match, and a missing pattern does not exclude AWG. This command does not change
 the live scan score. Exit 0 means analysis completed; 64 is an input error.
 
 See [source research, thresholds, capture requirements and limitations](docs/AMNEZIAWG_ANALYSIS.md).
+
+### Your own capture: `pcap`
+
+```powershell
+byebyevpn pcap client.pcapng --node 203.0.113.5
+byebyevpn pcap client.pcapng --node 203.0.113.5 --json
+```
+
+Capture your own client on the **physical interface** (Wireshark, `tcpdump`,
+`pktmon` + `etl2pcap`), open a few sites through the tunnel, stop, and
+give the file to `pcap`. It reads what a box on that link reads before any
+key, and sends nothing:
+
+- **client hellos**: SNI, JA4 (TCP, and QUIC from the decrypted Initial),
+  GREASE, the ECH extension, a post-quantum key share, ALPN. No GREASE
+  means not Chromium or Safari. `ech-ext yes` can be Chromium's GREASE ECH,
+  which still carries the real name;
+- **a TLS handshake inside the tunnel**: per server, the sizes of the first
+  flights after the outer handshake. An inner ClientHello, a certificate
+  flight back, then a client record of exactly an inner TLS 1.3 Finished
+  (58, 64, 74 or 80 B). Positive needs two matching flows. Calibrated on
+  real xray: VLESS and Trojan over TLS without Vision match 4 of 4 flows,
+  Vision and plain HTTPS 0 of 4. A size rule only; a negative is not
+  "invisible";
+- **DNS in the clear**: queries on port 53 and the resolvers they went to;
+  DoH to well-known resolver names is marked;
+- **traffic beside the node** (`--node`): public addresses other than your
+  node, IPv6 counted apart.
+
+Exit 2 when any of the last three is positive, 0 otherwise, 64 on a file it
+cannot read. Files up to 64 MiB; TCP is rebuilt for the first 64 KB of each
+direction.
+
+### Leaks on this machine: `local`
+
+`byebyevpn local` lists adapters, routes and VPN software as before and
+adds two checks that matter only while a tunnel adapter is up:
+
+- **IPv6 beside the tunnel**: if a non-tunnel adapter has a global IPv6
+  address, the tool connects to two public resolvers over IPv6 (a plain
+  TCP connect, closed at once) and looks at which local address the system
+  picked. No global IPv6 outside the tunnel: negative with no packets.
+- **DNS beside the tunnel**: Windows asks every adapter's resolver in
+  parallel unless a policy turns it off. The tool lists the resolvers the
+  system would use beside the tunnel and asks each twice for
+  `example.com`; an answer there means names leave in the clear. A kill
+  switch that drops them gives silence (inconclusive) or a refused send
+  (negative), never a leak.
+
+Exit 2 when either leaks, 0 otherwise. Windows only.
+
+### Several nodes: `batch` and `diff`
+
+```powershell
+byebyevpn batch nodes.txt --out 2026-10-01 --fast
+byebyevpn diff 2026-09-24 2026-10-01
+```
+
+`batch` runs the full scan on every line of the file (`#` starts a
+comment, duplicates are skipped, at most 256), prints a summary table and
+with `--out DIR` keeps one `--json` report per node. Scan options apply to
+every node; exit is the worst node's verdict code. `diff` compares two
+reports or two such directories, file by file: verdict (label, tier,
+checks, scored signals), surface (address, open ports, certificates,
+JA4S) and context (score, GeoIP tags). Offline; exit 2 when a verdict
+changed, 1 for any other change, 0 when nothing changed.
 
 ### Config audit
 
@@ -948,6 +1024,13 @@ SOCKS5-приветствие и SSTP-запрос повторяются до �
 отправляется ещё дважды. Все connect'ы идут без повтора SYN
 (`SIO_TCP_INITIAL_RTO`).
 
+`local` ничего не шлёт, пока не поднят туннельный адаптер. Тогда, только
+если у нетуннельного адаптера есть глобальный IPv6, по одному TCP connect'у
+на `[2606:4700:4700::1111]:443` и `[2001:4860:4860::8888]:443`, сразу
+закрытых, без данных; и каждому резолверу, которого система спросит мимо
+туннеля (не больше трёх), два обычных запроса `example.com` A с id из
+RAND_bytes. `pcap`, `diff` и `audit-config` только читают файлы.
+
 TLS-клиенты больше не кладут IP-адрес в SNI (RFC 6066, раздел 3): при
 цели-адресе OpenSSL-пробы идут без SNI, синтетический hello в стиле Chrome
 не содержит `server_name` (JA4 начинается с `t13i`), а SSTP-запрос берёт
@@ -1002,10 +1085,13 @@ byebyevpn j3 my.server.ru 443    # J3 active probing
 byebyevpn geoip 8.8.8.8          # GeoIP
 byebyevpn snitch my.server.ru    # RTT vs geo (§10.1)
 byebyevpn trace my.server.ru     # ICMP hop-count
-byebyevpn local                  # сканировать свою машину
+byebyevpn local                  # сканировать свою машину, вместе с утечками IPv6 и DNS
 byebyevpn audit-config cfg.json  # протоколы, Vision и ошибки настроек; без сетевых запросов
 byebyevpn sweep 1.2.3.0/24       # кластеризация подсети по TLS-отпечатку (v2.8.0)
 byebyevpn names sub.mysite.ru    # признаки в имени, офлайн
+byebyevpn pcap client.pcapng --node 1.2.3.4   # свой дамп глазами коробки
+byebyevpn batch nodes.txt --out today         # все ноды из файла, по отчёту на каждую
+byebyevpn diff yesterday today   # что поменялось по каждой ноде, офлайн
 ```
 
 `audit-config` для обоих ядер ловит два listener'а на одном порту и слое
@@ -1134,6 +1220,72 @@ byebyevpn names wg01.example.com us8360.nordvpn.com --json
   Reality с брендовым target. Если не проходит никуда, режется само имя.
   Два согласных раунда из трёх; выход 0 проходит, 2 не проходит,
   4 inconclusive.
+
+#### Свой дамп трафика: `pcap`
+
+```powershell
+byebyevpn pcap client.pcapng --node 203.0.113.5
+```
+
+Сними дамп своего клиента на **физическом интерфейсе** (Wireshark,
+`tcpdump`, `pktmon` + `etl2pcap`), открой пару сайтов через туннель,
+останови и отдай файл `pcap`. Он читает то, что коробка на этом канале
+видит до любого ключа, и ничего не отправляет:
+
+- **ClientHello**: SNI, JA4 (TCP и QUIC из расшифрованного Initial),
+  GREASE, расширение ECH, постквантовый key share, ALPN. Нет GREASE значит
+  не Chromium и не Safari. `ech-ext yes` может быть GREASE ECH от Chromium,
+  в нём настоящее имя всё равно открыто;
+- **TLS-рукопожатие внутри туннеля**: по каждому серверу размеры первых
+  полётов после внешнего рукопожатия. Внутренний ClientHello, обратно
+  полёт с сертификатом, потом запись клиента ровно размера внутреннего
+  TLS 1.3 Finished (58, 64, 74 или 80 Б). Positive нужно два совпавших
+  потока. Откалибровано на настоящем xray: VLESS и Trojan поверх TLS без
+  Vision совпадают в 4 потоках из 4, Vision и обычный HTTPS в 0 из 4.
+  Это правило по размерам; negative не значит "невидимо";
+- **DNS в открытую**: запросы на порт 53 и резолверы, куда они ушли; DoH к
+  известным резолверам отмечается;
+- **трафик мимо ноды** (`--node`): публичные адреса кроме твоей ноды,
+  IPv6 отдельно.
+
+Выход 2, если что-то из трёх последних positive, иначе 0, 64 если файл не
+читается. Файлы до 64 МиБ; TCP собирается на первые 64 КБ в каждую сторону.
+
+#### Утечки на этой машине: `local`
+
+`byebyevpn local` как раньше показывает адаптеры, маршруты и VPN-софт и
+добавляет две проверки, которые имеют смысл только при поднятом
+туннельном адаптере:
+
+- **IPv6 мимо туннеля**: если у нетуннельного адаптера есть глобальный
+  IPv6, тулза подключается к двум публичным резолверам по IPv6 (обычный
+  TCP connect, сразу закрыт) и смотрит, какой локальный адрес выбрала
+  система. Глобального IPv6 вне туннеля нет: negative без единого пакета.
+- **DNS мимо туннеля**: Windows спрашивает резолверы всех адаптеров
+  параллельно, если политика это не выключила. Тулза перечисляет
+  резолверы, которых система спросит мимо туннеля, и спрашивает каждый
+  дважды про `example.com`; ответ оттуда значит, что имена уходят в
+  открытую. Kill switch, который их режет, даёт тишину (inconclusive) или
+  отказ отправки (negative), но не утечку.
+
+Выход 2, если течёт хоть что-то, иначе 0. Только Windows.
+
+#### Несколько нод: `batch` и `diff`
+
+```powershell
+byebyevpn batch nodes.txt --out 2026-10-01 --fast
+byebyevpn diff 2026-09-24 2026-10-01
+```
+
+`batch` гоняет полный скан по каждой строке файла (`#` начинает
+комментарий, повторы пропускаются, не больше 256), печатает сводную
+таблицу и с `--out DIR` сохраняет `--json` отчёт на каждую ноду. Опции
+скана действуют на все ноды; выход равен худшему коду вердикта. `diff`
+сравнивает два отчёта или две такие папки по именам файлов: вердикт
+(label, tier, проверки, сработавшие сигналы), поверхность (адрес,
+открытые порты, сертификаты, JA4S) и контекст (score, метки GeoIP).
+Офлайн; выход 2, если поменялся вердикт, 1 при любом другом изменении,
+0 если ничего не поменялось.
 
 Hostname резолвится через `getaddrinfo`; IPv4 выбирается всегда, а
 выбранный IP печатается в фазе [1/8]. На IPv4-only каналах (РФ / СНГ)

@@ -333,6 +333,76 @@ bool quic_unprotect_client_initial(const vector<uint8_t>& dg, const vector<uint8
     return false;
 }
 
+bool quic_client_initial_crypto(const vector<uint8_t>& dg, vector<uint8_t>& dcid,
+                                vector<QuicCryptoPiece>& pieces) {
+    // long header, fixed bit, type Initial, version 1
+    if (dg.size() < 1200 || (dg[0] & 0xf0) != 0xc0) return false;
+    if (dg[1] != 0 || dg[2] != 0 || dg[3] != 0 || dg[4] != 1) return false;
+    size_t pos = 5;
+    uint8_t dl = dg[pos++];
+    if (dl == 0 || dl > 20 || pos + dl >= dg.size()) return false;
+    dcid.assign(dg.begin() + pos, dg.begin() + pos + dl);
+    pos += dl;
+    uint8_t sl = dg[pos++];
+    if (sl > 20 || pos + sl >= dg.size()) return false;
+    pos += sl;
+    uint64_t token_len = 0, length_val = 0;
+    if (!parse_varint(dg, pos, token_len) || token_len > dg.size() - pos) return false;
+    pos += (size_t)token_len;
+    if (!parse_varint(dg, pos, length_val)) return false;
+    size_t pn_offset = pos;
+    if (length_val > dg.size() - pn_offset || pn_offset + 4 + 16 > dg.size()) return false;
+
+    QuicInitialSecrets s = quic_initial_secrets(dcid, true);
+    if (!s.ok) return false;
+    vector<uint8_t> sample(dg.begin() + pn_offset + 4, dg.begin() + pn_offset + 20);
+    vector<uint8_t> mask = quic_hp_mask(s.hp, sample);
+    if (mask.size() < 5) return false;
+    uint8_t first = dg[0] ^ (uint8_t)(mask[0] & 0x0f);
+    size_t pn_len = (size_t)(first & 0x03) + 1;
+    if (length_val < pn_len + 16) return false;
+    vector<uint8_t> hdr(dg.begin(), dg.begin() + pn_offset + pn_len);
+    hdr[0] = first;
+    uint32_t pn = 0;
+    for (size_t i = 0; i < pn_len; ++i) {
+        hdr[pn_offset + i] = dg[pn_offset + i] ^ mask[1 + i];
+        pn = (pn << 8) | hdr[pn_offset + i];
+    }
+    size_t ct_start = pn_offset + pn_len;
+    vector<uint8_t> ct_tag(dg.begin() + ct_start, dg.begin() + pn_offset + (size_t)length_val);
+    vector<uint8_t> nonce = s.iv;
+    for (int i = 0; i < 4; ++i) nonce[8 + (size_t)i] ^= (uint8_t)(pn >> (24 - 8 * i));
+    vector<uint8_t> pt;
+    if (!gcm_decrypt(s.key, nonce, hdr, ct_tag, pt)) return false;
+
+    pieces.clear();
+    size_t p = 0;
+    while (p < pt.size()) {
+        uint8_t ft = pt[p++];
+        if (ft == 0x00 || ft == 0x01) continue;           // padding, ping
+        if (ft == 0x02 || ft == 0x03) {                   // ack
+            uint64_t v = 0, ranges = 0;
+            if (!parse_varint(pt, p, v) || !parse_varint(pt, p, v)) break;
+            if (!parse_varint(pt, p, ranges) || !parse_varint(pt, p, v)) break;
+            if (ranges > pt.size()) break;
+            bool bad = false;
+            for (uint64_t r = 0; r < ranges * 2 && !bad; ++r) bad = !parse_varint(pt, p, v);
+            for (int e = 0; ft == 0x03 && e < 3 && !bad; ++e) bad = !parse_varint(pt, p, v);
+            if (bad) break;
+            continue;
+        }
+        if (ft != 0x06) break;                            // close or unknown: stop
+        uint64_t off = 0, clen = 0;
+        if (!parse_varint(pt, p, off) || !parse_varint(pt, p, clen) || clen > pt.size() - p) break;
+        QuicCryptoPiece c;
+        c.offset = off;
+        c.data.assign(pt.begin() + p, pt.begin() + p + (size_t)clen);
+        pieces.push_back(std::move(c));
+        p += (size_t)clen;
+    }
+    return true;
+}
+
 // transport params + quic clienthello
 
 namespace {

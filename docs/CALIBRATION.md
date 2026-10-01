@@ -309,6 +309,54 @@ and a mail address all dropped or unmarked. A live crt.sh query could not
 be made on 2026-10-01: crt.sh answered 502 to every request, including
 plain ones outside this tool; the command exits 4 there, as designed.
 
+## 2026-10-01, unreleased: pcap, leaks in local, batch and diff
+
+Run `v3.2-pcap-leaks`: the 34 runs above plus four `pcap` runs on captures
+recorded through real xray 26.7.28 (`capture_lab.py`, four connections per
+case, Python OpenSSL 3.5 inside the tunnel).
+
+Before: no rule. The first draft of the inner-handshake rule accepted any
+client record of 50 to 110 B after the server flight; plain HTTP/1.1
+keep-alive from scripted clients sends requests in that range, so the
+draft would have flagged ordinary HTTPS. It never shipped. The rule was narrowed to the
+exact plaintext sizes of an inner TLS 1.3 Finished (58, 64, 74, 80 B)
+before the first run. The plain case was then made harder: browser-sized
+requests (about 490 B) so that the hello-size threshold no longer saves
+it and only the Finished-size test separates it.
+
+After:
+
+| run | capture | first flights (client, server, then client) | matched | outcome | expected |
+|---|---|---|---|---|---|
+| PV | VLESS over TLS | 1558, 1895, then 80 B | 4 of 4 | positive | positive |
+| PT | Trojan over TLS | 1600, 1893, then 80 B | 4 of 4 | positive | positive |
+| PX | VLESS with Vision | 1618, 2162, then 1170 B | 0 of 4 | negative | negative |
+| PH | plain HTTPS, keep-alive | 492, 12581, then 492 B | 0 of 4 | negative | negative |
+
+80 B is the inner CCS plus a SHA-384 Finished: OpenSSL picks
+TLS_AES_256_GCM_SHA384. Vision pads the same flight to a random size.
+
+| signal or claim | TP | FP | TN | FN | INC |
+|---|---|---|---|---|---|
+| inner-handshake | 2 | 0 | 2 | 0 | 0 |
+| pcap-dns-clear | 0 | 0 | 4 | 0 | 0 |
+| pcap-outside-node | 0 | 0 | 4 | 0 | 0 |
+
+Every other row as in the entry above (J INCONCLUSIVE this time, both
+labels accepted). 0 FP, 38 of 38, exit 0.
+
+`local` leaks have no lab stand (they need a machine with a tunnel
+client). On one Windows machine with a TUN client: no global IPv6 beside
+the tunnel, negative without a packet; the LAN resolver beside the tunnel
+stayed silent to both queries while the tunnel client was up,
+inconclusive, which is what a firewall that drops port 53 beside the
+tunnel looks like. `batch` on stands A and S twice and `diff` of the two
+directories: no change, exit 0; `diff` of A against S: label, tier,
+checks, the socks5 signal and the ports, exit 2.
+
+Same tree: unit 257/257 (8763 checks), Python 9/9, cppcheck 0 and
+clang-tidy 0 on the new modules.
+
 ## Field log
 
 Your own nodes: date, scanner version, verdict, what happened to the node

@@ -74,14 +74,15 @@ jobs:
           CHECKS="$CHECKS,-bugprone-easily-swappable-parameters"
           for f in src/common/util.cpp src/common/tspu.cpp src/common/config.cpp \
                    src/scan/ja4.cpp src/scan/ja4s_db.cpp src/scan/brand.cpp \
-                   src/scan/ports.cpp; do
+                   src/scan/ports.cpp src/scan/capture.cpp src/scan/pcap_analysis.cpp \
+                   src/local/leaks.cpp src/app/report_diff.cpp; do
             clang-tidy --quiet \
               --checks="$CHECKS" \
               --warnings-as-errors='*' \
               "$f" -- -std=c++20 -Isrc
           done
 
-      - name: libFuzzer smoke pass on the JA4 parsers
+      - name: libFuzzer smoke pass on the JA4 and capture parsers
         run: |
           set -eux
           make fuzz FUZZ_CXX='clang++'
@@ -89,6 +90,9 @@ jobs:
           # in the byte parsers without holding up ci. a real campaign runs
           # this for hours, not 45 seconds.
           ./fuzz_ja4 -max_total_time=45 -timeout=10
+          # capture files are untrusted input; seeds give the walker a start
+          mkdir -p fuzz-pcap-work
+          ./fuzz_pcap -max_total_time=45 -timeout=10 fuzz-pcap-work fuzz/corpus_pcap
 
   #
   # sanitizer checks for the paths exercised by the unit tests
@@ -208,6 +212,8 @@ jobs:
           python tests/test_dpi_socket.py ./byebyevpn.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/test_audit_fixtures.py ./byebyevpn.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/test_offline_cli.py ./byebyevpn.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: check no mingw/openssl dll leaked into exe

@@ -58,6 +58,8 @@ SRC := \
     src/scan/amnezia_probe.cpp \
     src/scan/awg_entropy.cpp \
     src/scan/awg_capture.cpp \
+    src/scan/capture.cpp \
+    src/scan/pcap_analysis.cpp \
     src/scan/quic.cpp \
     src/scan/grpc.cpp \
     src/scan/transport_probe.cpp \
@@ -69,6 +71,7 @@ SRC := \
     src/scan/ech.cpp \
     src/scan/ech_query.cpp \
     src/local/local.cpp \
+    src/local/leaks.cpp \
     src/app/target.cpp \
     src/app/orchestrator.cpp \
     src/app/verdict_print.cpp \
@@ -81,7 +84,10 @@ SRC := \
     src/app/tui.cpp \
     src/app/tui_layout.cpp \
     src/app/hostname_analysis.cpp \
-    src/app/awg_analysis.cpp
+    src/app/awg_analysis.cpp \
+    src/app/pcap_cli.cpp \
+    src/app/report_diff.cpp \
+    src/app/batch.cpp
 
 OBJ := $(SRC:.cpp=.o)
 
@@ -187,6 +193,13 @@ TEST_SRC := \
     src/scan/ct_names.cpp \
     src/scan/awg_entropy.cpp \
     src/scan/awg_capture.cpp \
+    src/scan/capture.cpp \
+    tests/test_pcap.cpp \
+    tests/test_leaks.cpp \
+    tests/test_report_diff.cpp \
+    src/app/report_diff.cpp \
+    src/local/leaks.cpp \
+    src/scan/pcap_analysis.cpp \
     src/scan/udp_validate.cpp \
     src/common/util.cpp \
     src/common/tspu.cpp \
@@ -235,14 +248,19 @@ test-asan: $(TEST_SRC) $(TEST_HEADERS)
 # libfuzzer harness for the ja4 byte parsers (clang only).
 #
 FUZZ_CXX ?= clang++
-fuzz: fuzz/fuzz_ja4.cpp src/scan/ja4.cpp
+FUZZ_PCAP_SRC = src/scan/pcap_analysis.cpp src/scan/capture.cpp src/scan/ja4.cpp src/scan/quic.cpp \
+    src/common/json.cpp src/common/outcome.cpp
+
+fuzz: fuzz/fuzz_ja4.cpp fuzz/fuzz_pcap.cpp src/scan/ja4.cpp $(FUZZ_PCAP_SRC)
 	$(FUZZ_CXX) -std=c++20 -g -O1 -fsanitize=fuzzer,address,undefined \
 	    fuzz/fuzz_ja4.cpp src/scan/ja4.cpp -lcrypto -o fuzz_ja4
+	$(FUZZ_CXX) -std=c++20 -g -O1 -fsanitize=fuzzer,address,undefined \
+	    fuzz/fuzz_pcap.cpp $(FUZZ_PCAP_SRC) -lcrypto -o fuzz_pcap
 
 clean:
 	rm -f $(OBJ) $(WIN_OBJ) $(BIN) $(BIN)-static $(BIN).exe $(BIN)-*-win64.zip $(BIN)-win64.zip
 	rm -f $(OBJ:.o=.d) $(WIN_OBJ:.o=.d)
-	rm -f byebyevpn-tests byebyevpn-tests-asan udp-probe-tests.exe web-probe-tests.exe fuzz_ja4 byebyevpn-sbom.json
+	rm -f byebyevpn-tests byebyevpn-tests-asan udp-probe-tests.exe web-probe-tests.exe fuzz_ja4 fuzz_pcap byebyevpn-sbom.json
 	rm -rf dist-release
 
 .PHONY: all windows windows-static static release-zip install clean test test-asan fuzz

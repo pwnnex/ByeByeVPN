@@ -57,7 +57,7 @@ void save_begin(const vector<string>& pos) {
                 static const set<string> cmds = {
                     "scan","full","ports","udp","tls","j3","geoip",
                     "snitch","trace","traceroute","local","me","self","help",
-                    "audit-config","audit","sweep","grpc","dpi","ech","awg-entropy",
+                    "audit-config","audit","sweep","grpc","dpi","ech","awg-entropy","pcap","batch","diff",
                     "names","name"
                 };
                 if (pos.size() >= 2 && cmds.count(pos[0])) target = pos[1];
@@ -275,6 +275,15 @@ int run_command(const vector<string>& pos) {
         if (cmd == "awg-entropy") {
             if (pos.size() != 2) { printf("usage: awg-entropy <capture.pcap|capture.pcapng> [--json]\n"); rc = 64; goto done; }
             rc = run_awg_analysis(pos[1]);
+        } else if (cmd == "pcap") {
+            if (pos.size() != 2) { printf("usage: pcap <capture.pcap|capture.pcapng> [--node ip] [--json]\n"); rc = 64; goto done; }
+            rc = run_pcap_analysis(pos[1]);
+        } else if (cmd == "batch") {
+            if (pos.size() != 2) { printf("usage: batch <targets.txt> [--out DIR] [--json] [scan options]\n"); rc = 64; goto done; }
+            rc = run_batch(pos[1]);
+        } else if (cmd == "diff") {
+            if (pos.size() != 3) { printf("usage: diff <old.json|old dir> <new.json|new dir> [--json]\n"); rc = 64; goto done; }
+            rc = run_diff(pos[1], pos[2]);
         } else if (cmd == "scan" || cmd == "full") {
             if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
             FullReport R = run_full_target(pos[1]);
@@ -389,7 +398,7 @@ int run_command(const vector<string>& pos) {
             print_geo(f1.get()); print_geo(f2.get()); print_geo(f3.get());
             print_geo(f4.get()); print_geo(f5.get());
         } else if (cmd == "local" || cmd == "me" || cmd == "self") {
-            run_local_analysis();
+            rc = run_local_analysis();
         } else if (cmd == "snitch") {
             if (pos.size() < 2) { printf("need target\n"); rc = 64; goto done; }
             int port = pos.size() >= 3 ? std::atoi(pos[2].c_str()) : 443;

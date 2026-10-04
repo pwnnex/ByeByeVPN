@@ -2,7 +2,7 @@
 #include "https_probe.h"
 #include "tls_ctx.h"
 #include "tls_io.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "../net/tcp.h"
 #include "../common/util.h"
 

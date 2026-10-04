@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// minimal winhttp get wrapper used by geoip + crt.sh + doh.
+// minimal platform HTTP GET wrapper used by geoip + crt.sh + doh.
 // no ua string - bare get against json endpoints. an optional accept header is
 // supported for content-negotiating endpoints (e.g. cloudflare doh, which needs
 // `Accept: application/dns-json`); it is empty for every other caller so the

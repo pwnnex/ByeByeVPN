@@ -6,7 +6,7 @@
 #include <openssl/evp.h>
 
 namespace {
-std::string name_text(X509_NAME* name) {
+std::string name_text(const X509_NAME* name) {
     if (!name) return {};
     char* text = X509_NAME_oneline(name, nullptr, 0);
     std::string out = text ? text : "";
@@ -14,7 +14,7 @@ std::string name_text(X509_NAME* name) {
     return out;
 }
 
-std::string attribute(X509_NAME* name, int nid) {
+std::string attribute(const X509_NAME* name, int nid) {
     if (!name) return {};
     const int index = X509_NAME_get_index_by_NID(name, nid, -1);
     if (index < 0) return {};

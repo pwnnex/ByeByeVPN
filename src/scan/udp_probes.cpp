@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "udp_probes.h"
 #include "quic.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 
 #include <openssl/crypto.h>
 #include <openssl/rand.h>
@@ -134,7 +134,7 @@ void wg_keyed_gap() {
     // timestamp moves in 2^24 ns steps; back-to-back probes lose the second
     unsigned char b = 0;
     RAND_bytes(&b, 1);
-    Sleep(1000 + 2 * b);
+    sleep_ms(1000 + 2 * b);
 }
 
 string quic_reply_summary(const UdpResult& u) {

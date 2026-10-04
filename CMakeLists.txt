@@ -30,8 +30,6 @@ set(BBVPN_SOURCES
     src/net/dns.cpp
     src/net/tcp.cpp
     src/net/udp.cpp
-    src/net/http.cpp
-    src/net/icmp.cpp
 
     src/geoip/geoip.cpp
 
@@ -86,7 +84,6 @@ set(BBVPN_SOURCES
     src/scan/ech.cpp
     src/scan/ech_query.cpp
 
-    src/local/local.cpp
     src/local/leaks.cpp
 
     src/app/target.cpp
@@ -107,6 +104,24 @@ set(BBVPN_SOURCES
     src/app/batch.cpp
 )
 
+if(WIN32)
+    list(APPEND BBVPN_SOURCES
+        src/common/platform_win.cpp
+        src/common/terminal_win.cpp
+        src/net/http.cpp
+        src/net/icmp.cpp
+        src/local/local.cpp
+    )
+else()
+    list(APPEND BBVPN_SOURCES
+        src/common/platform_posix.cpp
+        src/common/terminal_posix.cpp
+        src/net/http_posix.cpp
+        src/net/icmp_posix.cpp
+        src/local/local_posix.cpp
+    )
+endif()
+
 add_executable(byebyevpn ${BBVPN_SOURCES})
 target_link_libraries(byebyevpn PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
@@ -115,7 +130,8 @@ if(WIN32)
     target_compile_definitions(byebyevpn PRIVATE _WIN32_WINNT=0x0A00)
 else()
     find_package(Threads REQUIRED)
-    target_link_libraries(byebyevpn PRIVATE Threads::Threads)
+    find_package(CURL REQUIRED)
+    target_link_libraries(byebyevpn PRIVATE Threads::Threads CURL::libcurl)
 endif()
 
 install(TARGETS byebyevpn RUNTIME DESTINATION bin)

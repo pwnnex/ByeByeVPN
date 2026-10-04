@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "util.h"
+#include "platform.h"
 
 // string helpers shared by the cli and tests
 // platform-specific conversions stay behind _WIN32
 #ifdef _WIN32
-#include "winhdr.h"
 #else
 #include <strings.h>
-#include <unistd.h>     // usleep
 #endif
 
 #include "config.h"
@@ -238,11 +237,7 @@ void csprng_bytes(unsigned char* buf, int n) { RAND_bytes(buf, n); }
 void stealth_sleep_ms(int min_ms, int max_ms) {
     if (!g_stealth) return;
     if (max_ms <= min_ms) {
-#ifdef _WIN32
-        Sleep((unsigned)min_ms);
-#else
-        usleep((useconds_t)min_ms * 1000);
-#endif
+        sleep_ms((unsigned)min_ms);
         return;
     }
     unsigned char r[2];
@@ -250,9 +245,5 @@ void stealth_sleep_ms(int min_ms, int max_ms) {
     unsigned span = (unsigned)(max_ms - min_ms + 1);
     unsigned pick = (((unsigned)r[0] << 8) | r[1]) % span;
     unsigned ms = (unsigned)min_ms + pick;
-#ifdef _WIN32
-    Sleep(ms);
-#else
-    usleep((useconds_t)ms * 1000);
-#endif
+    sleep_ms(ms);
 }

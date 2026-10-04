@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // socket must be nonblocking; retries share one deadline.
 #pragma once
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "tls_ctx.h"
 #include <openssl/ssl.h>
 #include <chrono>
@@ -23,10 +23,12 @@ int tls_io(SSL* ssl, SOCKET socket, std::chrono::steady_clock::time_point deadli
         }
         const auto left = std::chrono::duration_cast<std::chrono::microseconds>(deadline - std::chrono::steady_clock::now()).count();
         if (left <= 0) { error = "TLS I/O deadline exceeded"; return -1; }
-        timeval timeout{static_cast<long>(left / 1000000), static_cast<long>(left % 1000000)};
+        timeval timeout{};
+        timeout.tv_sec = left / 1000000;
+        timeout.tv_usec = left % 1000000;
         fd_set ready;
         FD_ZERO(&ready); FD_SET(socket, &ready);
-        const int selected = select(0, why == SSL_ERROR_WANT_READ ? &ready : nullptr,
+        const int selected = select(static_cast<int>(socket) + 1, why == SSL_ERROR_WANT_READ ? &ready : nullptr,
                                     why == SSL_ERROR_WANT_WRITE ? &ready : nullptr, nullptr, &timeout);
         if (selected == 0) { error = "TLS I/O deadline exceeded"; return -1; }
         if (selected < 0) { error = "TLS socket wait failed"; return -1; }

@@ -2,7 +2,7 @@
 #include "utls.h"
 #include "chrome_ch.h"
 #include "tls_ctx.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "../common/util.h"
 #include "../net/tcp.h"
 

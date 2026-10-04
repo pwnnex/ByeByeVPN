@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "fingerprint.h"
 #include "tls_ctx.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "../common/util.h"
 #include "../common/config.h"
 #include "../common/tspu.h"

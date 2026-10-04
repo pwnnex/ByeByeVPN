@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // command dispatch shared by the command line and the interactive panel,
 // plus the --save file around one run.
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "../common/console.h"
 #include "../common/config.h"
 #include "../common/util.h"
@@ -172,7 +172,7 @@ int run_sni_real_check(const string& host, const string& node_ip, int port) {
     std::vector<SniRound> rounds;
     std::vector<Outcome> obs;
     while (!observations_settled(obs)) {
-        if (!obs.empty()) Sleep(700);
+        if (!obs.empty()) sleep_ms(700);
         SniRound r;
         r.node_benign = dpi_clienthello(node_ip, port, "www.example.com");
         r.node_target = dpi_clienthello(node_ip, port, sni);
@@ -236,7 +236,7 @@ int run_volume_check(const string& host, const string& ip, int port) {
     control();
     std::vector<Outcome> obs;
     while (!observations_settled(obs)) {
-        if (!obs.empty()) Sleep(500);
+        if (!obs.empty()) sleep_ms(500);
         targets.push_back(volume_fetch(ip, port, host, g_volume_path));
         obs.push_back(volume_transfer_outcome(targets.back()));
         order.emplace_back("target", targets.back());

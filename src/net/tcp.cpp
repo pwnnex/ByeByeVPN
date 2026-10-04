@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tcp.h"
 
-#include <mstcpip.h>
-
 #include <algorithm>
 #include <string>
 #include <vector>
@@ -11,18 +9,6 @@ using std::string;
 using std::vector;
 
 namespace {
-
-// windows retries syn after rst
-// refused: 2030 ms without, 1 ms with
-void no_syn_retransmit(SOCKET s) {
-    TCP_INITIAL_RTO_PARAMETERS p{};
-    p.Rtt = TCP_INITIAL_RTO_UNSPECIFIED_RTT;
-    p.MaxSynRetransmissions = TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS;
-    DWORD out = 0;
-    // pre-1703 rejects it, keeps old timing
-    WSAIoctl(s, SIO_TCP_INITIAL_RTO, &p, sizeof(p), nullptr, 0, &out, nullptr, nullptr);
-}
-
 bool is_unreachable(int e) {
     return e == WSAEHOSTUNREACH || e == WSAENETUNREACH;
 }
@@ -44,7 +30,7 @@ SOCKET tcp_connect(const string& host, int port, int timeout_ms, string& err) {
     for (auto* p: ordered) {
         s = socket(p->ai_family, SOCK_STREAM, IPPROTO_TCP);
         if (s == INVALID_SOCKET) continue;
-        no_syn_retransmit(s);
+        platform_disable_syn_retransmit(s);
         u_long nb = 1; ioctlsocket(s, FIONBIO, &nb);
         int rc = connect(s, p->ai_addr, (int)p->ai_addrlen);
         if (rc == 0) { u_long bl = 0; ioctlsocket(s, FIONBIO, &bl); break; }
@@ -52,9 +38,9 @@ SOCKET tcp_connect(const string& host, int port, int timeout_ms, string& err) {
         if (ce == WSAEWOULDBLOCK) {
             fd_set wr, ex; FD_ZERO(&wr); FD_SET(s, &wr); FD_ZERO(&ex); FD_SET(s, &ex);
             timeval tv{}; tv.tv_sec = timeout_ms / 1000; tv.tv_usec = (timeout_ms % 1000) * 1000;
-            int sr = select(0, nullptr, &wr, &ex, &tv);
+            int sr = select(static_cast<int>(s) + 1, nullptr, &wr, &ex, &tv);
             if (sr > 0 && (FD_ISSET(s, &wr) || FD_ISSET(s, &ex))) {
-                int se = 0; int sl = sizeof(se);
+                int se = 0; socket_len_t sl = sizeof(se);
                 getsockopt(s, SOL_SOCKET, SO_ERROR, (char*)&se, &sl);
                 if (se == 0) { u_long bl = 0; ioctlsocket(s, FIONBIO, &bl); break; }
                 if (se == WSAECONNREFUSED) saw_refused = true;
@@ -77,9 +63,7 @@ SOCKET tcp_connect(const string& host, int port, int timeout_ms, string& err) {
         else                  err = "other";
     }
     if (s != INVALID_SOCKET) {
-        DWORD timeout = (DWORD)std::max(1, timeout_ms);
-        if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout)) != 0 ||
-            setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (char*)&timeout, sizeof(timeout)) != 0) {
+        if (!set_socket_timeouts(s, std::max(1, timeout_ms))) {
             closesocket(s);
             err = "socket timeout setup";
             return INVALID_SOCKET;
@@ -89,8 +73,7 @@ SOCKET tcp_connect(const string& host, int port, int timeout_ms, string& err) {
 }
 
 int tcp_recv_to(SOCKET s, char* buf, int max, int timeout_ms) {
-    DWORD to = (DWORD)timeout_ms;
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&to, sizeof(to));
+    set_socket_recv_timeout(s, timeout_ms);
     return recv(s, buf, max, 0);
 }
 

@@ -4,11 +4,9 @@
 #include "orchestrator.h"
 #include "preflight.h"
 #include "verdict.h"
-#include "../common/winhdr.h"
+#include "../common/terminal.h"
 #include "../common/config.h"
 #include "../common/util.h"
-
-#include <io.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -29,8 +27,6 @@ void out(const string& s) {
 
 string sgr(const char* code) { return g_no_color ? string() : string("\x1b[") + code + "m"; }
 const char* const RESET = "\x1b[0m";
-const char* const ALT_ON = "\x1b[?1049h\x1b[?25l";
-const char* const ALT_OFF = "\x1b[?25h\x1b[?1049l";
 
 // box drawing, utf-8
 const char* const TL = "\xE2\x95\xAD";
@@ -46,46 +42,13 @@ const char* const LTRT = "\xE2\x86\x90\xE2\x86\x92";
 
 string rep(const char* s, int n) { string r; for (int i = 0; i < n; ++i) r += s; return r; }
 
-struct Size { int w = 80, h = 25; };
-Size term_size() {
-    Size s;
-    CONSOLE_SCREEN_BUFFER_INFO i;
-    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &i)) {
-        s.w = i.srWindow.Right - i.srWindow.Left + 1;
-        s.h = i.srWindow.Bottom - i.srWindow.Top + 1;
-    }
-    return s;
-}
+using Size = TerminalSize;
+using K = TerminalKeyCode;
+using Key = TerminalKey;
 
-enum class K { None, Up, Down, Left, Right, Enter, Esc, Back, Home, End, PgUp, PgDn, Tab, Char };
-struct Key { K k = K::None; wchar_t ch = 0; };
-
-Key read_key() {
-    Key r;
-    wint_t c = _getwch();
-    if (c == 0 || c == 0xE0) {
-        switch (_getwch()) {
-        case 72: r.k = K::Up; break;    case 80: r.k = K::Down; break;
-        case 75: r.k = K::Left; break;  case 77: r.k = K::Right; break;
-        case 71: r.k = K::Home; break;  case 79: r.k = K::End; break;
-        case 73: r.k = K::PgUp; break;  case 81: r.k = K::PgDn; break;
-        default: break;
-        }
-        return r;
-    }
-    if (c == 13) r.k = K::Enter;
-    else if (c == 27) r.k = K::Esc;
-    else if (c == 8) r.k = K::Back;
-    else if (c == 9) r.k = K::Tab;
-    else { r.k = K::Char; r.ch = (wchar_t)c; }
-    return r;
-}
-
-string utf8(wchar_t c) {
-    char buf[8] = {0};
-    const int n = WideCharToMultiByte(CP_UTF8, 0, &c, 1, buf, sizeof(buf), nullptr, nullptr);
-    return string(buf, n > 0 ? n : 0);
-}
+Size term_size() { return terminal_size(); }
+Key read_key() { return terminal_read_key(); }
+string utf8(wchar_t character) { return terminal_utf8(character); }
 
 vector<string> split_ws(const string& s) {
     vector<string> v;
@@ -404,7 +367,8 @@ void wait_key(const string& msg) {
 
 // leave the panel, run, come back
 int run_outside(State& st, const string& heading, const vector<string>& args) {
-    out(string(ALT_OFF) + "\x1b[2J\x1b[H");
+    terminal_hide_ui();
+    out("\x1b[2J\x1b[H");
     out(sgr("1;97;45") + "  " + heading + "  " + RESET + "\r\n");
     if (st.save) { g_save_requested = true; g_save_path.clear(); save_begin(args); }
     const int rc = run_command(args);
@@ -599,24 +563,27 @@ bool act(State& st) {
         break;
     case Act::Local: args = {"local"}; break;
     case Act::Help: {
-        out(string(ALT_OFF) + "\x1b[2J\x1b[H");
+        terminal_hide_ui();
+        out("\x1b[2J\x1b[H");
         help();
         wait_key("any key: back to the panel");
-        out(ALT_ON);
+        terminal_show_ui();
         return false;
     }
     case Act::Last: {
         const FullReport* r = last_full_report();
         if (!r) { st.flash = "no full scan in this session yet"; return false; }
-        out(string(ALT_OFF) + "\x1b[2J\x1b[H");
+        terminal_hide_ui();
+        out("\x1b[2J\x1b[H");
         print_verdict(*r);
         print_card_below(*r);
         wait_key("any key: back to the panel");
-        out(ALT_ON);
+        terminal_show_ui();
         return false;
     }
     case Act::Machine: {
-        out(string(ALT_OFF) + "\x1b[2J\x1b[H");
+        terminal_hide_ui();
+        out("\x1b[2J\x1b[H");
         out(sgr("1;97;45") + "  Machine check  " + RESET + "\r\n");
         // a public address stands in for "any remote node"
         PreflightReport pf = preflight_decide(preflight_gather("1.1.1.1", !g_no_geoip, g_expect_ip), g_override_preflight);
@@ -624,7 +591,7 @@ bool act(State& st) {
         st.health = local_health();
         st.flash = pf.blocked ? "machine check: scans of public targets will stop at preflight" : "machine check: fit to measure";
         wait_key("any key: back to the panel");
-        out(ALT_ON);
+        terminal_show_ui();
         return false;
     }
     }
@@ -638,15 +605,8 @@ bool act(State& st) {
     out("\r\n" + sgr("2") + "exit code " + exit_meaning(it.act, rc) + RESET);
     st.flash = heading + ": exit " + exit_meaning(it.act, rc);
     wait_key("   any key: back to the panel");
-    out(ALT_ON);
+    terminal_show_ui();
     return false;
-}
-
-BOOL WINAPI on_ctrl(DWORD type) {
-    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT || type == CTRL_CLOSE_EVENT) {
-        out(ALT_OFF);
-    }
-    return FALSE;
 }
 
 } // namespace
@@ -659,18 +619,13 @@ std::string tui_preview(int w, int h, int sel) {
 }
 
 bool tui_available() {
-    DWORD mode = 0;
-    if (!_isatty(_fileno(stdin)) || !_isatty(_fileno(stdout))) return false;
-    if (!GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &mode)) return false;
-    if (!GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode)) return false;
-    return (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0;
+    return terminal_available();
 }
 
 void tui_run() {
     State st;
     st.health = local_health();
-    SetConsoleCtrlHandler(on_ctrl, TRUE);
-    out(ALT_ON);
+    TerminalSession terminal;
     for (;;) {
         draw(st);
         Key k = read_key();
@@ -698,6 +653,4 @@ void tui_run() {
         else if (k.k == K::Char && (k.ch == 'r' || k.ch == 'R')) { st.health = local_health(); st.flash = "status refreshed"; }
         else if (k.k == K::Enter) { if (act(st)) break; }
     }
-    out(ALT_OFF);
-    SetConsoleCtrlHandler(on_ctrl, FALSE);
 }

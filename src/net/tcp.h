@@ -4,7 +4,7 @@
 // so the caller can give meaningful diagnostics.
 #pragma once
 
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "read_end.h"
 #include <string>
 

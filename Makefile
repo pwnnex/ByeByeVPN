@@ -14,6 +14,8 @@ SRC := \
     src/common/tspu.cpp \
     src/common/json.cpp \
     src/common/outcome.cpp \
+    src/common/platform_win.cpp \
+    src/common/terminal_win.cpp \
     src/net/dns.cpp \
     src/net/tcp.cpp \
     src/net/udp.cpp \
@@ -97,6 +99,12 @@ BIN = byebyevpn
 WIN_OSSL_DIR ?= build-win
 
 all: $(BIN)
+
+# Native Apple Silicon / Intel macOS build. Homebrew supplies OpenSSL;
+# libcurl is provided by the macOS SDK.
+macos:
+	cmake -S . -B build-macos -DOPENSSL_ROOT_DIR="$$(brew --prefix openssl@3)" -DCMAKE_BUILD_TYPE=Release
+	cmake --build build-macos --parallel
 
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
@@ -230,6 +238,14 @@ TEST_SRC := \
     src/app/sweep_core.cpp \
     src/common/config.cpp
 
+ifeq ($(OS),Windows_NT)
+TEST_PLATFORM_SRC := src/common/platform_win.cpp
+else
+TEST_PLATFORM_SRC := src/common/platform_posix.cpp
+endif
+
+TEST_SRC += $(TEST_PLATFORM_SRC)
+
 # headers and embedded data must also invalidate the single-command test build.
 TEST_HEADERS := $(wildcard src/common/*.h src/scan/*.h src/app/*.h tests/*.h) src/scan/public_suffix_data.inc
 
@@ -263,6 +279,6 @@ clean:
 	rm -f byebyevpn-tests byebyevpn-tests-asan udp-probe-tests.exe web-probe-tests.exe fuzz_ja4 fuzz_pcap byebyevpn-sbom.json
 	rm -rf dist-release
 
-.PHONY: all windows windows-static static release-zip install clean test test-asan fuzz
+.PHONY: all macos windows windows-static static release-zip install clean test test-asan fuzz
 
 -include $(OBJ:.o=.d) $(WIN_OBJ:.o=.d)

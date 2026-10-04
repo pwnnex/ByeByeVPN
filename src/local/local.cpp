@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "local.h"
 #include "leaks.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "../common/console.h"
 #include "../common/util.h"
 #include "../net/tcp.h"
@@ -485,7 +485,7 @@ int run_local_analysis() {
             p.server = r.first;
             p.adapter = r.second->name;
             for (int i = 0; i < 2; ++i) {
-                if (i) Sleep(300);
+                if (i) sleep_ms(300);
                 p.seen.push_back(ask_resolver(p.server));
             }
             const auto answers = std::count(p.seen.begin(), p.seen.end(), DnsSeen::Answer);

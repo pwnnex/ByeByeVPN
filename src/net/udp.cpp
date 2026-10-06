@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "udp.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "../common/util.h"
 #include "../common/config.h"
 
@@ -27,7 +27,7 @@ UdpResult udp_probe(const string& host, int port,
     if (g_udp_jitter) {
         unsigned char jb = 0;
         RAND_bytes(&jb, 1);
-        Sleep(50 + (jb % 251));
+        sleep_ms(50 + (jb % 251));
     }
     auto t0 = std::chrono::steady_clock::now();
     addrinfo hints{}; hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_DGRAM;
@@ -44,9 +44,7 @@ UdpResult udp_probe(const string& host, int port,
 
     SOCKET s = socket(chosen->ai_family, SOCK_DGRAM, IPPROTO_UDP);
     if (s == INVALID_SOCKET) { freeaddrinfo(ai); r.err = "socket"; return r; }
-    DWORD to = (DWORD)timeout_ms;
-    if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&to, sizeof(to)) != 0 ||
-        setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (char*)&to, sizeof(to)) != 0) {
+    if (!set_socket_timeouts(s, timeout_ms)) {
         freeaddrinfo(ai); closesocket(s); r.err = "socket timeout setup"; return r;
     }
     // a connected udp socket accepts replies only from the probed endpoint.

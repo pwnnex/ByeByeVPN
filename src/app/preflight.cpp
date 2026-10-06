@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "preflight.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "../common/console.h"
 #include "../common/util.h"
 #include "../local/local.h"
@@ -31,34 +31,11 @@ bool fake_ip(const string& ip) {
     return (a == 198 && (b == 18 || b == 19)) || (a == 100 && b >= 64 && b <= 127) || a >= 240;
 }
 
-string reg_string(HKEY root, const char* path, const char* name) {
-    char buf[1024] = {0};
-    DWORD size = sizeof(buf) - 1, type = 0;
-    if (RegGetValueA(root, path, name, RRF_RT_REG_SZ, &type, buf, &size) != ERROR_SUCCESS) return {};
-    return buf;
-}
-
-DWORD reg_dword(HKEY root, const char* path, const char* name) {
-    DWORD v = 0, size = sizeof(v);
-    if (RegGetValueA(root, path, name, RRF_RT_REG_DWORD, nullptr, &v, &size) != ERROR_SUCCESS) return 0;
-    return v;
-}
-
-string system_proxy() {
-    const char* key = "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
-    string out;
-    if (reg_dword(HKEY_CURRENT_USER, key, "ProxyEnable")) out = reg_string(HKEY_CURRENT_USER, key, "ProxyServer");
-    const string pac = reg_string(HKEY_CURRENT_USER, key, "AutoConfigURL");
-    if (!pac.empty()) out += (out.empty() ? "" : ", ") + string("PAC ") + pac;
-    return out;
-}
-
 vector<string> proxy_env() {
     vector<string> out;
     for (const char* v : {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"}) {
-        char buf[8]; size_t n = 0;
-        if (getenv_s(&n, buf, sizeof(buf), v) == 0 && n > 1) out.push_back(v);
-        else if (n > sizeof(buf)) out.push_back(v);
+        const char* value = std::getenv(v);
+        if (value && *value) out.push_back(v);
     }
     return out;
 }
@@ -90,7 +67,7 @@ PreflightFacts preflight_gather(const string& target_ip, bool third_party_ok, co
         if (p.kind == ProcKind::Rewriter) f.rewriters.push_back(p.category);
         else f.proxy_clients.push_back(p.category);
     }
-    f.system_proxy = system_proxy();
+    f.system_proxy = platform_system_proxy();
     f.proxy_env = proxy_env();
 
     // control probe for the path the target uses
@@ -130,7 +107,7 @@ LocalHealth local_health() {
         auto& v = p.kind == ProcKind::Rewriter ? h.rewriters : h.proxy_clients;
         if (std::find(v.begin(), v.end(), p.category) == v.end()) v.push_back(p.category);
     }
-    h.system_proxy = system_proxy();
+    h.system_proxy = platform_system_proxy();
     return h;
 }
 

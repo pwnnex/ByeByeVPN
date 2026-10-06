@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "j3.h"
 #include "chrome_ch.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "../common/util.h"
 #include "../common/config.h"
 #include "../net/tcp.h"

@@ -5,7 +5,7 @@
 #include "tls_ctx.h"
 #include "tls_io.h"
 #include "../common/util.h"
-#include "../common/winhdr.h"
+#include "../common/platform.h"
 #include "../net/tcp.h"
 
 #include <openssl/bio.h>

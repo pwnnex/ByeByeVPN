@@ -4,11 +4,7 @@
 статическая `byebyevpn.exe` под Windows (работает через Wine на Linux
 и macOS), без прав администратора, без DLL-зависимостей.
 
-```
-
 <img width="1097" height="567" alt="snap" src="https://github.com/user-attachments/assets/064180ba-719d-476e-9bda-d2b952b1a203" />
-
-```
 
 **Languages:** [English](#english) · [Русский](#русский) · [简体中文](README.zh-CN.md) · [فارسی](README.fa.md)
 
